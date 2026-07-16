@@ -6,8 +6,7 @@ import json
 import datetime
 import pandas as pd
 import streamlit as st
-
-from src.modules.extraction import render_extraction_page
+import pyarrow.parquet as pq
 
 # Configuração de caminhos
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
@@ -26,12 +25,23 @@ def carregar_dict_municipios():
     except Exception:
         return {}
 
-def converter_df_para_xlsx(df):
+def converter_df_para_xlsx_estilizado(df):
+    """Converte o DataFrame para Excel aplicando a pintura verde nas linhas encontradas"""
     if df is None or df.empty:
         return b""
+    
     output = io.BytesIO()
+    
+    # Regra de cor nativa para o Excel
+    def pintar_linha_excel(row):
+        if row.get('Status TCE') == 'Encontrado':
+            return ['background-color: #c6efce; color: #006100'] * len(row)
+        return [''] * len(row)
+        
+    df_styled = df.style.apply(pintar_linha_excel, axis=1)
+    
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Cruzamento')
+        df_styled.to_excel(writer, index=False, sheet_name='Auditoria Fortes')
     return output.getvalue()
 
 def padronizar_documento(serie):
@@ -51,6 +61,7 @@ def padronizar_valor(serie):
         x = str(x).upper().replace('R$', '').strip()
         if x in ['NAN', 'NONE', 'NULL', '']: return '0.00'
         x = re.sub(r'[^\d\.,]', '', x)
+        if x == '': return '0.00'
         if ',' in x and '.' in x:
             if x.rfind(',') > x.rfind('.'):
                 x = x.replace('.', '').replace(',', '.')
@@ -64,12 +75,29 @@ def padronizar_valor(serie):
             return "0.00"
     return serie.apply(limpar_moeda)
 
-@st.cache_data(show_spinner="Decodificando bases Parquet na memória...")
+@st.cache_data(show_spinner="Extraindo chaves dos Parquets em Alta Velocidade...")
 def carregar_parquets_em_cache(caminhos_parquets):
     if not caminhos_parquets:
         return pd.DataFrame()
-    dfs = [pd.read_parquet(c) for c in caminhos_parquets]
-    return pd.concat(dfs, ignore_index=True)
+    
+    colunas_alvo = ['numero_nota_fiscal', 'data_emissao', 'valor_liquido']
+    dfs = []
+    
+    for c in caminhos_parquets:
+        try:
+            schema = pq.read_schema(c)
+            cols_no_arquivo = schema.names
+            cols_para_carregar = list(set(colunas_alvo).intersection(cols_no_arquivo))
+            
+            if cols_para_carregar:
+                df = pd.read_parquet(c, columns=cols_para_carregar)
+                for col in cols_para_carregar:
+                    df[col] = df[col].astype(str)
+                dfs.append(df)
+        except Exception:
+            continue
+            
+    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 def carregar_relatorio_fortes(arquivo_upload):
     try:
@@ -114,61 +142,88 @@ def carregar_relatorio_fortes(arquivo_upload):
         return None
 
 # ==========================================
-# MOTOR FORTES x TCE (CHAVE FIXA)
+# MOTOR FORTES x TCE (RELATÓRIO ÚNICO)
 # ==========================================
-def processar_cruzamento_fortes(df_fortes, df_tce, nf_f, nf_t, data_f, data_t, valor_f, valor_t):
+def processar_cruzamento_fortes(df_fortes, df_tce, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t):
     df_f = df_fortes.copy()
     df_t = df_tce.copy()
     
-    # 1. Base obrigatória (Número da Nota)
+    if nf_t not in df_t.columns: df_t[nf_t] = '0'
+    if data_t not in df_t.columns: df_t[data_t] = 'SEM_DATA'
+    if valor_t not in df_t.columns: df_t[valor_t] = '0.00'
+
+    # --- PADRONIZAÇÃO BÁSICA ---
     df_f['_debug_nota'] = padronizar_documento(df_f[nf_f])
     df_t['_debug_nota'] = padronizar_documento(df_t[nf_t])
     
-    df_f['__CHAVE_MESTRA__'] = df_f['_debug_nota']
-    df_t['__CHAVE_MESTRA__'] = df_t['_debug_nota']
+    df_f['_debug_data'] = padronizar_data(df_f[data_f])
+    df_t['_debug_data'] = padronizar_data(df_t[data_t])
+    
+    df_f['_debug_valor'] = padronizar_valor(df_f[valor_f])
+    df_t['_debug_valor'] = padronizar_valor(df_t[valor_t])
+
+    # --- EXTRAÇÃO DE COMPETÊNCIA ---
+    meses_map = {'JAN': '01', 'FEV': '02', 'MAR': '03', 'ABR': '04', 'MAI': '05', 'JUN': '06',
+                 'JUL': '07', 'AGO': '08', 'SET': '09', 'OUT': '10', 'NOV': '11', 'DEZ': '12'}
+    
+    def get_comp_f(x):
+        x = str(x).upper().strip()
+        m = re.match(r'([A-Z]{3})/(\d{2,4})', x)
+        if m:
+            ano = m.group(2)
+            if len(ano) == 2: ano = '20' + ano
+            return f"{ano}-{meses_map.get(m.group(1), '00')}"
+        return 'SEM_COMP'
+        
+    def get_comp_t(x):
+        x = str(x).strip()
+        if len(x) >= 7 and x[4] == '-': return x[:7]
+        return 'SEM_COMP'
+
+    df_f['_debug_comp'] = df_f[obs_f].apply(get_comp_f) if obs_f in df_f.columns else 'SEM_COMP'
+    df_t['_debug_comp'] = df_t[data_t].apply(get_comp_t)
+
+    # --- CHAVE MESTRA ---
+    df_f['__CHAVE_MESTRA__'] = df_f['_debug_nota'] + "_" + df_f['_debug_comp'] + "_" + df_f['_debug_valor']
+    df_t['__CHAVE_MESTRA__'] = df_t['_debug_nota'] + "_" + df_t['_debug_comp'] + "_" + df_t['_debug_valor']
     
     df_f = df_f[df_f['_debug_nota'] != '0']
     df_t = df_t[df_t['_debug_nota'] != '0']
-        
-    # 2. Concatena a Data 
-    df_f['_debug_data'] = padronizar_data(df_f[data_f])
-    df_t['_debug_data'] = padronizar_data(df_t[data_t])
-    df_f['__CHAVE_MESTRA__'] += "_" + df_f['_debug_data']
-    df_t['__CHAVE_MESTRA__'] += "_" + df_t['_debug_data']
-        
-    # 3. Concatena o Valor 
-    df_f['_debug_valor'] = padronizar_valor(df_f[valor_f])
-    df_t['_debug_valor'] = padronizar_valor(df_t[valor_t])
-    df_f['__CHAVE_MESTRA__'] += "_" + df_f['_debug_valor']
-    df_t['__CHAVE_MESTRA__'] += "_" + df_t['_debug_valor']
 
+    # --- SEPARAÇÃO DE DEBUG ---
     cols_debug_f = ['__CHAVE_MESTRA__'] + [c for c in df_f.columns if c.startswith('_debug')]
     cols_debug_t = ['__CHAVE_MESTRA__'] + [c for c in df_t.columns if c.startswith('_debug')]
-    df_debug_f = df_f[cols_debug_f].head(50)
-    df_debug_t = df_t[cols_debug_t].head(50)
+    df_debug_f = df_f[cols_debug_f].head(300)
+    df_debug_t = df_t[cols_debug_t].head(300)
 
+    # Renomeando colunas originais
     df_f = df_f.rename(columns={c: f'FORTES_{c}' for c in df_f.columns if not c.startswith('__') and not c.startswith('_debug')})
     df_t = df_t.rename(columns={c: f'TCE_{c}' for c in df_t.columns if not c.startswith('__') and not c.startswith('_debug')})
 
+    # Cruzamento Absoluto
     df_mesclado = pd.merge(df_f, df_t, on='__CHAVE_MESTRA__', how='outer', indicator=True)
     
-    def limpar_lixo(df):
-        cols_drop = [c for c in df.columns if '__CHAVE' in c or '_merge' in c or '_debug' in c]
-        return df.drop(columns=cols_drop, errors='ignore').dropna(axis=1, how='all')
-
-    df_ambos = limpar_lixo(df_mesclado[df_mesclado['_merge'] == 'both'])
-    df_so_fortes = limpar_lixo(df_mesclado[df_mesclado['_merge'] == 'left_only'])
-    df_so_tce = limpar_lixo(df_mesclado[df_mesclado['_merge'] == 'right_only'])
+    # Cálculos de Métricas
+    qtd_ambos = len(df_mesclado[df_mesclado['_merge'] == 'both'])
+    qtd_so_fortes = len(df_mesclado[df_mesclado['_merge'] == 'left_only'])
+    qtd_so_tce = len(df_mesclado[df_mesclado['_merge'] == 'right_only'])
     
-    return df_ambos, df_so_fortes, df_so_tce, df_debug_f, df_debug_t
+    # CONSTRUÇÃO DO RELATÓRIO ÚNICO (PRIORIDADE FORTES)
+    df_relatorio = df_mesclado[df_mesclado['_merge'].isin(['both', 'left_only'])].copy()
+    df_relatorio['Status TCE'] = df_relatorio['_merge'].apply(lambda x: 'Encontrado' if x == 'both' else 'Não Encontrado')
+    
+    # Isola apenas as colunas do Fortes + o Status e limpa os prefixos
+    cols_fortes = [c for c in df_relatorio.columns if c.startswith('FORTES_')]
+    df_relatorio = df_relatorio[cols_fortes + ['Status TCE']].copy()
+    df_relatorio.columns = [c.replace('FORTES_', '') for c in cols_fortes] + ['Status TCE']
+    
+    return df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, df_debug_f, df_debug_t
 
 # ==========================================
 # RENDERIZAÇÃO DA INTERFACE
 # ==========================================
 def render_bloco_fortes():
-    st.markdown("#### 📊 Auditoria Fortes × TCE (Notas Fiscais)")
-    st.caption("Cruza o relatório financeiro do sistema Fortes com as Notas Fiscais extraídas do TCE-CE.")
-    
+    st.markdown("#### 📊 Auditoria Fortes × TCE (Notas Fiscais)")    
     os.makedirs(PASTA_INTERNAL, exist_ok=True)
     st.divider()
 
@@ -183,6 +238,7 @@ def render_bloco_fortes():
             st.success(f"✅ Arquivo carregado e estruturado: **{len(df_fortes):,}** linhas.")
 
     # --- 2. SELEÇÃO INTELIGENTE DE PARQUETS ---
+    from src.modules.extraction import render_extraction_page
     st.markdown("**📄 2. Seleção Inteligente de Bases do TCE-CE**")
     todos_parquets = glob.glob(os.path.join(PASTA_TCE, "*.parquet"))
     nomes_arquivos = [os.path.basename(f) for f in todos_parquets]
@@ -192,26 +248,12 @@ def render_bloco_fortes():
     municipios_completos = sorted(list(dict_mun.keys())) if dict_mun else []
     
     f_arq_cat = "notas_fiscais"
-    f_arq_ano = "Todos"
-    f_arq_mun = "Todos"
 
-    col_f_arq_ano, col_f_arq_mun, col_btn_ext = st.columns([1, 2, 1.5])
+    col_f_arq_ano, col_f_arq_mun = st.columns([1, 1])
     with col_f_arq_ano:
         f_arq_ano = st.selectbox("📅 Ano:", ["Todos"] + anos_completos)
     with col_f_arq_mun:
         f_arq_mun = st.selectbox("📍 Município:", ["Todos"] + municipios_completos, format_func=lambda x: dict_mun.get(x, x) if x != "Todos" else "Todos")
-    with col_btn_ext:
-        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-        if st.button("📥 Extrair Novas Bases", use_container_width=True, key="btn_ext_fortes"):
-            st.session_state['show_ext_fortes'] = not st.session_state.get('show_ext_fortes', False)
-            
-    if st.session_state.get('show_ext_fortes', False):
-        with st.container(border=True):
-            render_extraction_page()
-            st.divider()
-            if st.button("❌ Fechar Extração", key="close_ext_fortes"):
-                st.session_state['show_ext_fortes'] = False
-                st.rerun()
 
     arquivos_filtrados = []
     padrao_busca = re.compile(r"^(.*?)_([0-9]{4})(?:_[0-9]{2})?_([0-9]+)\.parquet$")
@@ -228,8 +270,10 @@ def render_bloco_fortes():
         col_chk, _ = st.columns([1, 1])
         with col_chk:
             selecionar_todos = st.checkbox("✅ Selecionar todos os filtrados para a auditoria", value=True, key="chk_all_fortes")
-        if selecionar_todos: selecionados_tce = arquivos_filtrados
-        else: selecionados_tce = st.multiselect("📄 Selecione manualmente os arquivos:", options=arquivos_filtrados, default=arquivos_filtrados)
+        if selecionar_todos: 
+            selecionados_tce = arquivos_filtrados
+        else: 
+            selecionados_tce = st.multiselect("📄 Selecione manualmente os arquivos:", options=arquivos_filtrados, default=arquivos_filtrados)
 
     # --- 3. EXECUÇÃO DA AUDITORIA ---
     if df_fortes is not None and selecionados_tce:
@@ -237,55 +281,56 @@ def render_bloco_fortes():
         caminhos_completos = [os.path.join(PASTA_TCE, arq) for arq in selecionados_tce]
         df_tce_filtrado = carregar_parquets_em_cache(caminhos_completos)
 
-        # Variáveis chumbadas de forma invisível
-        nf_f, data_f, valor_f = 'Documento', 'Data de Emissão', 'Valor Total'
+        nf_f, data_f, valor_f, obs_f = 'Documento', 'Data de Emissão', 'Valor Total', 'Observação'
         nf_t, data_t, valor_t = 'numero_nota_fiscal', 'data_emissao', 'valor_liquido'
 
-        if st.button("🚀 Iniciar Auditoria", type="primary", use_container_width=True):
+        if st.button("Iniciar", type="primary", use_container_width=True):
             
-            colunas_faltando_fortes = [c for c in [nf_f, data_f, valor_f] if c not in df_fortes.columns]
-            colunas_faltando_tce = [c for c in [nf_t, data_t, valor_t] if c not in df_tce_filtrado.columns]
+            colunas_faltando_fortes = [c for c in [nf_f, data_f, valor_f, obs_f] if c not in df_fortes.columns]
             
             if colunas_faltando_fortes:
-                st.error(f"🚨 ERRO: O arquivo do Fortes importado não possui as colunas obrigatórias: {colunas_faltando_fortes}. Verifique se o relatório está no formato correto.")
-            elif colunas_faltando_tce:
-                st.error(f"🚨 ERRO: A base do TCE não possui as colunas obrigatórias: {colunas_faltando_tce}.")
+                st.error(f"🚨 ERRO: O arquivo do Fortes importado não possui as colunas obrigatórias: {colunas_faltando_fortes}.")
             else:
-                with st.spinner("Padronizando valores e processando cruzamento..."):
-                    df_ambos, df_so_fortes, df_so_tce, df_debug_f, df_debug_t = processar_cruzamento_fortes(
-                        df_fortes, df_tce_filtrado, nf_f, nf_t, data_f, data_t, valor_f, valor_t
+                with st.spinner("Comparando chaves e construindo relatório mestre..."):
+                    df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, df_debug_f, df_debug_t = processar_cruzamento_fortes(
+                        df_fortes, df_tce_filtrado, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t
                     )
                     
-                    if len(df_ambos) == 0:
-                        st.error("🚨 O cruzamento resultou em 0. Veja abaixo como o sistema formatou as suas chaves e identifique a divergência.")
-                        with st.expander("🛠️ Modo Diagnóstico (Por que não casou?)", expanded=True):
+                    st.markdown("###  Resultados da Auditoria")
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("✅ Encontrados (Bateram)", f"{qtd_ambos:,}".replace(',', '.'))
+                    m2.metric("⚠️ Não Encontrados", f"{qtd_so_fortes:,}".replace(',', '.'))
+                    m3.metric("🏢 Total no Fortes", f"{len(df_relatorio):,}".replace(',', '.'))
+                    m4.metric("🏛️ Notas Sobrando no TCE", f"{qtd_so_tce:,}".replace(',', '.'), help="Notas fiscais baixadas do TCE que não constam neste relatório do Fortes.")
+                    
+                    st.divider()
+                    
+                    # Estilização visual para o painel web
+                    def pintar_linha_web(row):
+                        if row.get('Status TCE') == 'Encontrado':
+                            return ['background-color: rgba(198, 239, 206, 0.3); color: #28a745'] * len(row)
+                        return [''] * len(row)
+
+                    st.markdown("##### 📄 Relatório Mestre (Base: Fortes)")
+                    st.dataframe(df_relatorio.style.apply(pintar_linha_web, axis=1), use_container_width=True)
+                    
+                    st.download_button(
+                        "📥 Baixar Relatório (Excel com Cores)", 
+                        data=converter_df_para_xlsx_estilizado(df_relatorio), 
+                        file_name="relatorio_auditoria_fortes.xlsx",
+                        type="primary",
+                        use_container_width=True
+                    )
+
+                    # Diagnóstico Permanente (Se algo falhar)
+                    if qtd_so_fortes > 0 or qtd_so_tce > 0:
+                        st.divider()
+                        with st.expander("🐞 Modo Diagnóstico (Ver chaves brutas geradas)", expanded=(qtd_ambos==0)):
+                            st.caption("Abaixo estão as chaves exatas geradas pelo motor. Compare as duas tabelas para descobrir por que certas notas não bateram.")
                             col_d1, col_d2 = st.columns(2)
                             with col_d1:
-                                st.markdown("**O que o Fortes gerou:**")
+                                st.markdown("**Chaves no Fortes (Nota_Competencia_Valor):**")
                                 st.dataframe(df_debug_f)
                             with col_d2:
-                                st.markdown("**O que o TCE gerou:**")
+                                st.markdown("**Chaves no TCE (Nota_Competencia_Valor):**")
                                 st.dataframe(df_debug_t)
-                    
-                    st.markdown("### 🎯 Resultados da Auditoria")
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("📌 Bateram (Sucesso)", f"{len(df_ambos):,}".replace(',', '.'))
-                    m2.metric("🏢 SÓ no Fortes", f"{len(df_so_fortes):,}".replace(',', '.'))
-                    m3.metric("🏛️ SÓ no TCE", f"{len(df_so_tce):,}".replace(',', '.'))
-                    m4.metric("Total Analisado", f"{len(df_fortes) + len(df_tce_filtrado):,}".replace(',', '.'))
-                    
-                    t1, t2, t3 = st.tabs([
-                        f"🏢 Só no Fortes ({len(df_so_fortes)})", 
-                        f"🏛️ Só no TCE ({len(df_so_tce)})", 
-                        f"✅ Casados ({len(df_ambos)})"
-                    ])
-                    
-                    with t1:
-                        st.dataframe(df_so_fortes.head(500), use_container_width=True)
-                        st.download_button("📥 Baixar Excel (Só Fortes)", data=converter_df_para_xlsx(df_so_fortes), file_name="notas_so_fortes.xlsx")
-                    with t2:
-                        st.dataframe(df_so_tce.head(500), use_container_width=True)
-                        st.download_button("📥 Baixar Excel (Só TCE)", data=converter_df_para_xlsx(df_so_tce), file_name="notas_so_tce.xlsx")
-                    with t3:
-                        st.dataframe(df_ambos.head(500), use_container_width=True)
-                        st.download_button("📥 Baixar Excel (Casados)", data=converter_df_para_xlsx(df_ambos), file_name="notas_batidas.xlsx")

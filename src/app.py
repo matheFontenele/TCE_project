@@ -69,9 +69,9 @@ with col_nav2:
         st.rerun()
 
 with col_nav3:
-    if st.button("⚙️ Regras de Negocio", key="btn_cfg", 
-                 type="primary" if st.session_state.modo_tela == 'Regras de Negocio' else "secondary"):
-        st.session_state.modo_tela = 'Regras de Negocio'
+    if st.button("⚙️ Comparação", key="btn_cfg", 
+                 type="primary" if st.session_state.modo_tela == 'Comparação' else "secondary"):
+        st.session_state.modo_tela = 'Comparação'
         st.rerun()
         
 
@@ -82,5 +82,5 @@ if st.session_state.modo_tela == 'Extração':
     render_extraction_page()
 elif st.session_state.modo_tela == 'Consulta':
     render_consultation_page()
-elif st.session_state.modo_tela == 'Regras de Negocio':
+elif st.session_state.modo_tela == 'Comparação':
     render_aba_comparacao()
