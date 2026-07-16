@@ -1,0 +1,76 @@
+[33m47fddbe[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{0}: reset: moving to ORIG_HEAD
+[33m6acf02c[m HEAD@{1}: reset: moving to ORIG_HEAD
+[33m47fddbe[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{2}: pull: Fast-forward
+[33m6acf02c[m HEAD@{3}: commit: dinamismo de extraction
+[33m0e3a8fc[m[33m ([m[1;31morigin/teste[m[33m)[m HEAD@{4}: pull origin main: Fast-forward
+[33mab40d14[m HEAD@{5}: pull origin teste: Fast-forward
+[33m0f90efe[m[33m ([m[1;31mmatheus/main[m[33m)[m HEAD@{6}: pull: Fast-forward
+[33m7375141[m HEAD@{7}: commit: Ajustes modulo de comparação TCT
+[33mcf03446[m HEAD@{8}: pull: Fast-forward
+[33mecf19a4[m HEAD@{9}: commit: retorno de versão ser pastas
+[33m0510eb5[m HEAD@{10}: commit: adição de sistema de pastas para extensabilidade
+[33m03b5027[m HEAD@{11}: commit: Ajustes logica de linhas fanstasmas
+[33m6cd5e09[m HEAD@{12}: commit: Ajustes na tela de detalhes
+[33mf3be263[m HEAD@{13}: commit: Ajustes em extração detalhada
+[33m21ae9f9[m HEAD@{14}: commit: Ajustes em legenda de status
+[33m29d86b3[m HEAD@{15}: commit: Ajustes no filtro de dias em atraso
+[33mff4b6a6[m HEAD@{16}: commit: Adição de filtro de mais de um fornecedor
+[33m13c9e2d[m HEAD@{17}: commit: Alteração em filtro de data - mudança para intervalo de anos
+[33m38827c6[m HEAD@{18}: commit: Ajustes em cores das tabelas
+[33m188894f[m HEAD@{19}: commit: Ajustes em excel detalhado
+[33mf74bac4[m HEAD@{20}: commit: Ajustes fluxo de requisições
+[33md0325c1[m HEAD@{21}: commit: Criação de multipla escolha de arquivos
+[33m0f288a4[m HEAD@{22}: checkout: moving from main to main
+[33m0f288a4[m HEAD@{23}: commit: fix(ci/cd): corrigir pasta onde o projeto está para git pull
+[33m06ee185[m HEAD@{24}: commit: fix(ci/cd): remove ssh, usa self-hosted runner"
+[33mb9dfb56[m HEAD@{25}: commit: fix(ci/cd): corrigir nomemclatura de pasta para o git pull
+[33m443473b[m HEAD@{26}: commit: test self-hosted runner
+[33maf1eb60[m HEAD@{27}: commit: fix(ci/cd): configurar environment correto para acesso às secrets
+[33m2176be5[m HEAD@{28}: commit: feat(ci/cd): configurar ci/cd para produção
+[33mbf81d0a[m HEAD@{29}: pull origin main: Fast-forward
+[33mc0ccd2a[m HEAD@{30}: commit: Criação do modulo de comparação TCE x Interno
+[33m3f26c11[m HEAD@{31}: Branch: renamed refs/heads/main to refs/heads/main
+[33m3f26c11[m HEAD@{33}: commit: Atualização - Incrementação de Modulos
+[33m81f1738[m HEAD@{34}: commit: Organização de estrutura de pastas
+[33m94608ef[m HEAD@{35}: commit: Criação de Exportação de modelos em Json e CSV Detallhado e organização de estrutura de arquivos
+[33m9d8fd65[m HEAD@{36}: commit: Ajustes PDF
+[33m3daa70b[m HEAD@{37}: pull: Fast-forward
+[33m0fba620[m HEAD@{38}: pull: Fast-forward
+[33m84027fc[m HEAD@{39}: pull: Fast-forward
+[33m646cb16[m HEAD@{40}: pull: Fast-forward
+[33m232e340[m HEAD@{41}: pull origin main: Fast-forward
+[33m4a951a1[m HEAD@{42}: pull origin main: Fast-forward
+[33mfad7549[m HEAD@{43}: pull origin main: Fast-forward
+[33mec70c91[m HEAD@{44}: pull origin main: Fast-forward
+[33m90a729b[m HEAD@{45}: pull origin main: Fast-forward
+[33m8de4800[m HEAD@{46}: pull origin main: Fast-forward
+[33m5a86309[m HEAD@{47}: pull origin main: Fast-forward
+[33m3dfb2ba[m HEAD@{48}: pull: Fast-forward
+[33m023f9c4[m HEAD@{49}: pull origin main: Fast-forward
+[33m105f445[m HEAD@{50}: pull origin main: Fast-forward
+[33m3ebfbdd[m HEAD@{51}: pull origin main: Fast-forward
+[33meff6397[m HEAD@{52}: pull origin main: Fast-forward
+[33m650d4a1[m HEAD@{53}: pull origin main: Fast-forward
+[33mc587622[m HEAD@{54}: pull origin main: Fast-forward
+[33md88688b[m HEAD@{55}: pull origin main: Fast-forward
+[33m757f32c[m HEAD@{56}: pull origin main: Fast-forward
+[33m9ac0825[m HEAD@{57}: pull origin main: Fast-forward
+[33md4a636a[m HEAD@{58}: pull origin main: Fast-forward
+[33mc72c558[m HEAD@{59}: reset: moving to HEAD
+[33mc72c558[m HEAD@{60}: pull: Fast-forward
+[33m2ed3169[m HEAD@{61}: pull: Fast-forward
+[33m2e18261[m HEAD@{62}: pull: Fast-forward
+[33m9e5d9ed[m HEAD@{63}: reset: moving to origin/main
+[33m4c805dc[m HEAD@{64}: pull: Fast-forward
+[33ma1c6bb4[m HEAD@{65}: reset: moving to HEAD
+[33ma1c6bb4[m HEAD@{66}: pull origin main: Fast-forward
+[33mde7813d[m HEAD@{67}: pull origin main: Fast-forward
+[33mb8c865f[m HEAD@{68}: pull origin main: Fast-forward
+[33m006d024[m HEAD@{69}: pull origin main: Fast-forward
+[33me0c8d03[m HEAD@{70}: pull origin main: Fast-forward
+[33m0c8a22c[m HEAD@{71}: reset: moving to origin/main
+[33m0c8a22c[m HEAD@{72}: pull origin main: Fast-forward
+[33mc05e065[m HEAD@{73}: reset: moving to HEAD
+[33mc05e065[m HEAD@{74}: pull: Fast-forward
+[33m8a66a54[m HEAD@{75}: pull origin main: Fast-forward
+[33m1ff482e[m HEAD@{76}: clone: from https://github.com/assistemasdev/automacao_api_tse.git
