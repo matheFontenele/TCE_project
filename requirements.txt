@@ -5,3 +5,4 @@ openpyxl
 pyarrow
 tqdm
 reportlab
+watchdog>=4.0.0

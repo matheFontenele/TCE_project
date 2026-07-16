@@ -7,7 +7,7 @@ from src.modules.extraction import render_extraction_page
 from src.modules.consultation import render_consultation_page
 from src.modules.compare import render_aba_comparacao
 
-st.set_page_config(page_title="Automação TCE-CE", layout="wide")
+st.set_page_config(page_title="Automação TCE-CE", page_icon="🤖", layout="wide")
 
 # Estilização para o Menu Superior
 st.markdown("""
@@ -54,7 +54,7 @@ if 'modo_tela' not in st.session_state:
 
 # Layout de Menu Superior
 st.title("🤖 Painel de Automação TCE-CE")
-col_nav1, col_nav2, col_nav3, col_spacer = st.columns([1.0, 1.0, 1.0, 5])
+col_nav1, col_nav2, col_nav3, col_spacer = st.columns([1.0, 1.0, 1.5, 5])
 
 with col_nav1:
     if st.button("📊 Extração", key="btn_ext", 
@@ -69,9 +69,9 @@ with col_nav2:
         st.rerun()
 
 with col_nav3:
-    if st.button("⚙️ Comparação", key="btn_cfg", 
-                 type="primary" if st.session_state.modo_tela == 'Comparação' else "secondary"):
-        st.session_state.modo_tela = 'Comparação'
+    if st.button("⚙️ Regras de Negocio", key="btn_cfg", 
+                 type="primary" if st.session_state.modo_tela == 'Regras de Negocio' else "secondary"):
+        st.session_state.modo_tela = 'Regras de Negocio'
         st.rerun()
         
 
@@ -82,5 +82,5 @@ if st.session_state.modo_tela == 'Extração':
     render_extraction_page()
 elif st.session_state.modo_tela == 'Consulta':
     render_consultation_page()
-elif st.session_state.modo_tela == 'Comparação':
+elif st.session_state.modo_tela == 'Regras de Negocio':
     render_aba_comparacao()
