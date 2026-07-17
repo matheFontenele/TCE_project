@@ -7,6 +7,7 @@ import datetime
 import pandas as pd
 import streamlit as st
 import pyarrow.parquet as pq
+import duckdb
 
 # Configuração de caminhos
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
@@ -26,13 +27,11 @@ def carregar_dict_municipios():
         return {}
 
 def converter_df_para_xlsx_estilizado(df):
-    """Converte o DataFrame para Excel aplicando a pintura verde nas linhas encontradas"""
     if df is None or df.empty:
         return b""
     
     output = io.BytesIO()
     
-    # Regra de cor nativa para o Excel
     def pintar_linha_excel(row):
         if row.get('Status TCE') == 'Encontrado':
             return ['background-color: #c6efce; color: #006100'] * len(row)
@@ -75,12 +74,13 @@ def padronizar_valor(serie):
             return "0.00"
     return serie.apply(limpar_moeda)
 
+# 🚀 MOTOR V8: Leitura Otimizada buscando Chaves Relacionais
 @st.cache_data(show_spinner="Extraindo chaves dos Parquets em Alta Velocidade...")
 def carregar_parquets_em_cache(caminhos_parquets):
     if not caminhos_parquets:
         return pd.DataFrame()
     
-    colunas_alvo = ['numero_nota_fiscal', 'data_emissao', 'valor_liquido']
+    colunas_alvo = ['numero_nota_fiscal', 'data_emissao', 'valor_liquido', 'codigo_municipio', 'numero_empenho']
     dfs = []
     
     for c in caminhos_parquets:
@@ -142,17 +142,20 @@ def carregar_relatorio_fortes(arquivo_upload):
         return None
 
 # ==========================================
-# MOTOR FORTES x TCE (RELATÓRIO ÚNICO)
+# 🚀 MOTOR RELACIONAL (PANDAS + DUCKDB)
 # ==========================================
-def processar_cruzamento_fortes(df_fortes, df_tce, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t):
+def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t):
     df_f = df_fortes.copy()
     df_t = df_tce.copy()
     
+    # Proteções de colunas
     if nf_t not in df_t.columns: df_t[nf_t] = '0'
     if data_t not in df_t.columns: df_t[data_t] = 'SEM_DATA'
     if valor_t not in df_t.columns: df_t[valor_t] = '0.00'
+    if 'codigo_municipio' not in df_t.columns: df_t['codigo_municipio'] = '000'
+    if 'numero_empenho' not in df_t.columns: df_t['numero_empenho'] = '0'
 
-    # --- PADRONIZAÇÃO BÁSICA ---
+    # --- PADRONIZAÇÃO ---
     df_f['_debug_nota'] = padronizar_documento(df_f[nf_f])
     df_t['_debug_nota'] = padronizar_documento(df_t[nf_t])
     
@@ -161,8 +164,10 @@ def processar_cruzamento_fortes(df_fortes, df_tce, nf_f, data_f, valor_f, obs_f,
     
     df_f['_debug_valor'] = padronizar_valor(df_f[valor_f])
     df_t['_debug_valor'] = padronizar_valor(df_t[valor_t])
+    
+    df_t['codigo_municipio'] = df_t['codigo_municipio'].astype(str).str.strip()
+    df_t['numero_empenho'] = df_t['numero_empenho'].astype(str).str.strip()
 
-    # --- EXTRAÇÃO DE COMPETÊNCIA ---
     meses_map = {'JAN': '01', 'FEV': '02', 'MAR': '03', 'ABR': '04', 'MAI': '05', 'JUN': '06',
                  'JUL': '07', 'AGO': '08', 'SET': '09', 'OUT': '10', 'NOV': '11', 'DEZ': '12'}
     
@@ -183,51 +188,142 @@ def processar_cruzamento_fortes(df_fortes, df_tce, nf_f, data_f, valor_f, obs_f,
     df_f['_debug_comp'] = df_f[obs_f].apply(get_comp_f) if obs_f in df_f.columns else 'SEM_COMP'
     df_t['_debug_comp'] = df_t[data_t].apply(get_comp_t)
 
-    # --- CHAVE MESTRA ---
     df_f['__CHAVE_MESTRA__'] = df_f['_debug_nota'] + "_" + df_f['_debug_comp'] + "_" + df_f['_debug_valor']
     df_t['__CHAVE_MESTRA__'] = df_t['_debug_nota'] + "_" + df_t['_debug_comp'] + "_" + df_t['_debug_valor']
     
     df_f = df_f[df_f['_debug_nota'] != '0']
     df_t = df_t[df_t['_debug_nota'] != '0']
 
-    # --- SEPARAÇÃO DE DEBUG ---
     cols_debug_f = ['__CHAVE_MESTRA__'] + [c for c in df_f.columns if c.startswith('_debug')]
     cols_debug_t = ['__CHAVE_MESTRA__'] + [c for c in df_t.columns if c.startswith('_debug')]
     df_debug_f = df_f[cols_debug_f].head(300)
     df_debug_t = df_t[cols_debug_t].head(300)
 
-    # Renomeando colunas originais
     df_f = df_f.rename(columns={c: f'FORTES_{c}' for c in df_f.columns if not c.startswith('__') and not c.startswith('_debug')})
     df_t = df_t.rename(columns={c: f'TCE_{c}' for c in df_t.columns if not c.startswith('__') and not c.startswith('_debug')})
 
-    # Cruzamento Absoluto
-    df_mesclado = pd.merge(df_f, df_t, on='__CHAVE_MESTRA__', how='outer', indicator=True)
+    # --- 2. O PODER DO DUCKDB (Agrupando e Somando Pagamentos) ---
+    caminhos_pag = [f.replace('notas_fiscais', 'notas_pagamentos') for f in caminhos_nf_tce]
+    arquivos_pag_validos = []
     
-    # Cálculos de Métricas
-    qtd_ambos = len(df_mesclado[df_mesclado['_merge'] == 'both'])
-    qtd_so_fortes = len(df_mesclado[df_mesclado['_merge'] == 'left_only'])
-    qtd_so_tce = len(df_mesclado[df_mesclado['_merge'] == 'right_only'])
+    for p in caminhos_pag:
+        if os.path.exists(p):
+            try:
+                schema_pag = pq.read_schema(p)
+                if 'numero_empenho' in schema_pag.names and 'codigo_municipio' in schema_pag.names:
+                    arquivos_pag_validos.append(p)
+            except:
+                pass
+
+    con = duckdb.connect(database=':memory:')
+    con.register('tabela_fortes', df_f)
+    con.register('tabela_tce', df_t)
     
-    # CONSTRUÇÃO DO RELATÓRIO ÚNICO (PRIORIDADE FORTES)
-    df_relatorio = df_mesclado[df_mesclado['_merge'].isin(['both', 'left_only'])].copy()
-    df_relatorio['Status TCE'] = df_relatorio['_merge'].apply(lambda x: 'Encontrado' if x == 'both' else 'Não Encontrado')
+    if arquivos_pag_validos:
+        pag_files_str = "[" + ", ".join([f"'{p}'" for p in arquivos_pag_validos]) + "]"
+        
+        # Faz um SUM e um MAX para pegar o total pago e a data mais recente daquele empenho
+        join_pagamento = f"""
+            LEFT JOIN (
+                SELECT 
+                    CAST(codigo_municipio AS VARCHAR) AS codigo_municipio,
+                    CAST(numero_empenho AS VARCHAR) AS numero_empenho,
+                    SUM(CAST(valor_nota_pagamento AS DOUBLE)) AS valor_total_pago,
+                    MAX(CAST(data_nota_pagamento AS VARCHAR)) AS ultima_data_pagamento,
+                    'Pago' AS flag_pagamento
+                FROM read_parquet({pag_files_str}, union_by_name=True)
+                WHERE numero_empenho IS NOT NULL
+                GROUP BY codigo_municipio, numero_empenho
+            ) AS pag 
+            ON t.TCE_codigo_municipio = pag.codigo_municipio 
+            AND t.TCE_numero_empenho = pag.numero_empenho
+        """
+        cols_pagamento = """
+            COALESCE(pag.flag_pagamento, 'Não Pago') AS "Status Pagamento",
+            pag.valor_total_pago AS "Total Pago (R$ TCE)",
+            pag.ultima_data_pagamento AS "Data Últ. Pagamento (TCE)"
+        """
+    else:
+        join_pagamento = ""
+        cols_pagamento = """
+            'Sem Arquivo de Pagamento' AS "Status Pagamento", 
+            NULL AS "Total Pago (R$ TCE)", 
+            NULL AS "Data Últ. Pagamento (TCE)"
+        """
+
+    # Query Mestra: Fortes + TCE + Pagamentos Agrupados
+    query = f"""
+        SELECT 
+            f.* EXCLUDE (__CHAVE_MESTRA__, _debug_nota, _debug_data, _debug_valor, _debug_comp),
+            CASE WHEN t.__CHAVE_MESTRA__ IS NOT NULL THEN 'Encontrado' ELSE 'Não Encontrado' END AS "Status TCE",
+            t.TCE_numero_empenho AS "Empenho Vinculado",
+            {cols_pagamento}
+        FROM tabela_fortes AS f
+        LEFT JOIN tabela_tce AS t ON f.__CHAVE_MESTRA__ = t.__CHAVE_MESTRA__
+        {join_pagamento}
+    """
     
-    # Isola apenas as colunas do Fortes + o Status e limpa os prefixos
-    cols_fortes = [c for c in df_relatorio.columns if c.startswith('FORTES_')]
-    df_relatorio = df_relatorio[cols_fortes + ['Status TCE']].copy()
-    df_relatorio.columns = [c.replace('FORTES_', '') for c in cols_fortes] + ['Status TCE']
+    df_relatorio = con.execute(query).df()
     
-    return df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, df_debug_f, df_debug_t
+    # Limpeza visual das colunas
+    df_relatorio.columns = [c.replace('FORTES_', '') for c in df_relatorio.columns]
+
+    colunas_para_remover = [
+        'Valor do Serviço Selecionado', 
+        'Valor do Produto Selecionado', 
+        'Valor dos Vencimentos de Cheque',
+        'Valor dos Vencimentos de Cartão',
+        'Valor da Baixa dos Vencimentos  de Cheque',
+        'Valor Cancelado',
+        'ISS',
+        'IRRF',
+        'PIS/COFINS/CSL',
+        'INSS',
+        'Valor ICMS Substituição',
+        'Valor IPI',
+        'Código do Grupo Econômico',
+        'Valor do Desconto Financeiro',
+        'Quantidade dos Itens',
+        'Valor do Desconto dos Itens',
+        'Valor Outras Retenções',
+        'Juros Recebidos',
+        'Multas Recebidas',
+        'Valor Juros Baixas Vencimentos Diversos',
+        'Valor Multa Baixas Vencimentos',
+        'Valor Juros Baixas Vencimentos Cheque',
+        'Valor Juros Baixas Vencimentos',
+        'Cheque	Juros Vencimento Diversos',
+        'Multa Vencimento Diversos',
+        'Descontos Vencimento Diversos',
+        'Desconto Incondicional'
+        'RESIDUOTOTAL',
+        'Código Natureza Operação',
+        'Nome Natureza Operação',
+        'OUTROSDESCONTOS',
+        'Valor Juros',
+        'Valor Líquido Provisão'
+    ]
+    
+    df_relatorio = df_relatorio.drop(columns=[col for col in colunas_para_remover if col in df_relatorio.columns])
+    
+    # Cálculos
+    qtd_ambos = len(df_relatorio[df_relatorio['Status TCE'] == 'Encontrado'])
+    qtd_so_fortes = len(df_relatorio[df_relatorio['Status TCE'] == 'Não Encontrado'])
+    qtd_pagas = len(df_relatorio[df_relatorio['Status Pagamento'] == 'Pago'])
+    
+    qtd_tce_unico = df_t['__CHAVE_MESTRA__'].nunique()
+    qtd_so_tce = max(0, qtd_tce_unico - qtd_ambos)
+    
+    return df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, qtd_pagas, df_debug_f, df_debug_t
 
 # ==========================================
 # RENDERIZAÇÃO DA INTERFACE
 # ==========================================
 def render_bloco_fortes():
-    st.markdown("#### 📊 Auditoria Fortes × TCE (Notas Fiscais)")    
+    st.markdown("#### 📊 Auditoria Fortes × TCE (Notas e Pagamentos)")    
     os.makedirs(PASTA_INTERNAL, exist_ok=True)
     st.divider()
 
-    # --- 1. UPLOAD FORTES ---
     st.markdown("**📥 1. Relatório do Sistema Fortes (Excel ou CSV)**")
     arquivo_upload = st.file_uploader("Faça o upload do arquivo (.xlsx, .xls ou .csv):", type=['xlsx', 'xls', 'csv'], key="up_fortes")
     
@@ -237,7 +333,6 @@ def render_bloco_fortes():
         if df_fortes is not None and not df_fortes.empty:
             st.success(f"✅ Arquivo carregado e estruturado: **{len(df_fortes):,}** linhas.")
 
-    # --- 2. SELEÇÃO INTELIGENTE DE PARQUETS ---
     from src.modules.extraction import render_extraction_page
     st.markdown("**📄 2. Seleção Inteligente de Bases do TCE-CE**")
     todos_parquets = glob.glob(os.path.join(PASTA_TCE, "*.parquet"))
@@ -275,7 +370,6 @@ def render_bloco_fortes():
         else: 
             selecionados_tce = st.multiselect("📄 Selecione manualmente os arquivos:", options=arquivos_filtrados, default=arquivos_filtrados)
 
-    # --- 3. EXECUÇÃO DA AUDITORIA ---
     if df_fortes is not None and selecionados_tce:
         st.divider()
         caminhos_completos = [os.path.join(PASTA_TCE, arq) for arq in selecionados_tce]
@@ -284,49 +378,47 @@ def render_bloco_fortes():
         nf_f, data_f, valor_f, obs_f = 'Documento', 'Data de Emissão', 'Valor Total', 'Observação'
         nf_t, data_t, valor_t = 'numero_nota_fiscal', 'data_emissao', 'valor_liquido'
 
-        if st.button("Iniciar", type="primary", use_container_width=True):
+        if st.button("🚀 Iniciar Auditoria Avançada", type="primary", use_container_width=True):
             
             colunas_faltando_fortes = [c for c in [nf_f, data_f, valor_f, obs_f] if c not in df_fortes.columns]
             
             if colunas_faltando_fortes:
                 st.error(f"🚨 ERRO: O arquivo do Fortes importado não possui as colunas obrigatórias: {colunas_faltando_fortes}.")
             else:
-                with st.spinner("Comparando chaves e construindo relatório mestre..."):
-                    df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, df_debug_f, df_debug_t = processar_cruzamento_fortes(
-                        df_fortes, df_tce_filtrado, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t
+                with st.spinner("DuckDB Relacional: Extraindo Pagamentos e Consolidando Relatório..."):
+                    df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, qtd_pagas, df_debug_f, df_debug_t = processar_cruzamento_fortes(
+                        df_fortes, df_tce_filtrado, caminhos_completos, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t
                     )
                     
-                    st.markdown("###  Resultados da Auditoria")
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("✅ Encontrados (Bateram)", f"{qtd_ambos:,}".replace(',', '.'))
+                    st.markdown("### 🎯 Resultados da Auditoria")
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("✅ Encontrados (TCE)", f"{qtd_ambos:,}".replace(',', '.'))
                     m2.metric("⚠️ Não Encontrados", f"{qtd_so_fortes:,}".replace(',', '.'))
-                    m3.metric("🏢 Total no Fortes", f"{len(df_relatorio):,}".replace(',', '.'))
-                    m4.metric("🏛️ Notas Sobrando no TCE", f"{qtd_so_tce:,}".replace(',', '.'), help="Notas fiscais baixadas do TCE que não constam neste relatório do Fortes.")
+                    m3.metric("💰 Notas c/ Pagamento", f"{qtd_pagas:,}".replace(',', '.'))
+                    m4.metric("🏢 Total no Fortes", f"{len(df_relatorio):,}".replace(',', '.'))
+                    m5.metric("🏛️ Sobra no TCE", f"{qtd_so_tce:,}".replace(',', '.'))
                     
                     st.divider()
                     
-                    # Estilização visual para o painel web
                     def pintar_linha_web(row):
                         if row.get('Status TCE') == 'Encontrado':
                             return ['background-color: rgba(198, 239, 206, 0.3); color: #28a745'] * len(row)
                         return [''] * len(row)
 
-                    st.markdown("##### 📄 Relatório Mestre (Base: Fortes)")
+                    st.markdown("##### 📄 Relatório Mestre Relacional (Base: Fortes + TCE + Pagamentos)")
                     st.dataframe(df_relatorio.style.apply(pintar_linha_web, axis=1), use_container_width=True)
                     
                     st.download_button(
-                        "📥 Baixar Relatório (Excel com Cores)", 
+                        "📥 Baixar Relatório Completo (Excel)", 
                         data=converter_df_para_xlsx_estilizado(df_relatorio), 
-                        file_name="relatorio_auditoria_fortes.xlsx",
+                        file_name="relatorio_auditoria_fortes_pagamentos.xlsx",
                         type="primary",
                         use_container_width=True
                     )
 
-                    # Diagnóstico Permanente (Se algo falhar)
                     if qtd_so_fortes > 0 or qtd_so_tce > 0:
                         st.divider()
                         with st.expander("🐞 Modo Diagnóstico (Ver chaves brutas geradas)", expanded=(qtd_ambos==0)):
-                            st.caption("Abaixo estão as chaves exatas geradas pelo motor. Compare as duas tabelas para descobrir por que certas notas não bateram.")
                             col_d1, col_d2 = st.columns(2)
                             with col_d1:
                                 st.markdown("**Chaves no Fortes (Nota_Competencia_Valor):**")
