@@ -25,7 +25,29 @@
                 {"coluna": "valor_liquidado", "label_caixa": "Valor Liquidado"},
                 {"coluna": "valor_pago", "label_caixa": "Valor Pago"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "🔍 Liquidações Vinculadas",
+                "tabela_alvo_prefixo": "liquidacoes",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Data", "campo": "data_liquidacao", "tipo": "data"},
+                    {"label": "Nº Liq.", "campo": "numero_nota_liquidacao", "tipo": "texto"},
+                    {"label": "Valor (R$)", "campo": "valor_liquidado", "tipo": "moeda"}
+                ]
+            },
+            {
+                "titulo_secao": "💸 Pagamentos Vinculados",
+                "tabela_alvo_prefixo": "notas_pagamentos",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Data", "campo": "data_nota_pagamento", "tipo": "data"},
+                    {"label": "Nº Caixa", "campo": "numero_documento_caixa", "tipo": "texto"},
+                    {"label": "Valor (R$)", "campo": "valor_nota_pagamento", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Notas Fiscais": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/notas_fiscais",
@@ -48,7 +70,29 @@
             "grid_financeiro": [
                 {"coluna": "valor_bruto", "label_caixa": "Valor da NF"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "📦 Itens Desta Nota",
+                "tabela_alvo_prefixo": "itens_notas_fiscais",
+                "chaves_join": ["codigo_municipio", "numero_nota_fiscal"],
+                "colunas_exibicao": [
+                    {"label": "Qtd", "campo": "quantidade_item", "tipo": "texto"},
+                    {"label": "Descrição", "campo": "descricao_item", "tipo": "texto"},
+                    {"label": "Valor (R$)", "campo": "valor_total_item", "tipo": "moeda"}
+                ]
+            },
+            {
+                "titulo_secao": "📑 Empenho Origem",
+                "tabela_alvo_prefixo": "notas_empenho",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Data Empenho", "campo": "data_emissao_empenho", "tipo": "data"},
+                    {"label": "Nº Empenho", "campo": "numero_empenho", "tipo": "texto"},
+                    {"label": "Valor Empenhado", "campo": "valor_empenhado", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Notas de Pagamento": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/notas_pagamentos",
@@ -73,7 +117,19 @@
                 {"coluna": "valor_empenhado_a_pagar", "label_caixa": "Valor Empenhado Restante"},
                 {"coluna": "estado_de_estornado", "label_caixa": "Valor Estornado"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "📑 Empenho de Origem",
+                "tabela_alvo_prefixo": "notas_empenho",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Credor", "campo": "nome_negociante", "tipo": "texto"},
+                    {"label": "Data", "campo": "data_emissao_empenho", "tipo": "data"},
+                    {"label": "Valor Empenhado", "campo": "valor_empenhado", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Pagamento e Liquidações": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/pagamentos_liquidacoes",
@@ -83,20 +139,42 @@
         "campos_ui": [],
         "colunas_texto": {
             "numero_nota_pagamento": "Nº Nota Pagto",
-            "numero_nota_liquidacao": "Nº Liquidação",
-            "numero_empenho": "Nº Empenho"
+            "numero_nota_empenho": "Nº Empenho",
+            "numero_sub_empenho": "Sub-Empenho"
         },
         "layout_card": {
-            "topo_esq": "numero_nota_liquidacao",
-            "titulo_grande": "numero_empenho",
+            "topo_esq": "numero_nota_pagamento",
+            "titulo_grande": "numero_nota_empenho",
             "meta_1": "municipio_referencia",
             "meta_2": "data_liquidacao",
-            "corpo_texto": "numero_nota_pagamento",
+            "corpo_texto": "numero_sub_empenho",
             "grid_financeiro": [
                 {"coluna": "valor_liquidado", "label_caixa": "Valor Liquidado"},
                 {"coluna": "valor_pago", "label_caixa": "Valor Pago"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "📑 Empenho Vinculado",
+                "tabela_alvo_prefixo": "notas_empenho",
+                "chaves_join": ["codigo_municipio", "numero_nota_empenho:numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Credor", "campo": "nome_negociante", "tipo": "texto"},
+                    {"label": "Data Empenho", "campo": "data_emissao_empenho", "tipo": "data"},
+                    {"label": "Valor (R$)", "campo": "valor_empenhado", "tipo": "moeda"}
+                ]
+            },
+            {
+                "titulo_secao": "💸 Detalhes do Pagamento",
+                "tabela_alvo_prefixo": "notas_pagamentos",
+                "chaves_join": ["codigo_municipio", "numero_nota_pagamento"],
+                "colunas_exibicao": [
+                    {"label": "Nº Caixa", "campo": "numero_documento_caixa", "tipo": "texto"},
+                    {"label": "Responsável", "campo": "nome_responsavel_pagamento", "tipo": "texto"},
+                    {"label": "Valor Pago", "campo": "valor_nota_pagamento", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Liquidações": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/liquidacoes",
@@ -121,7 +199,27 @@
             "grid_financeiro": [
                 {"coluna": "valor_bruto_nota_liquidacao", "label_caixa": "Valor Liquidado"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "📑 Empenho de Origem",
+                "tabela_alvo_prefixo": "notas_empenho",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Credor", "campo": "nome_negociante", "tipo": "texto"},
+                    {"label": "Valor Empenhado", "campo": "valor_empenhado", "tipo": "moeda"}
+                ]
+            },
+            {
+                "titulo_secao": "🧾 Nota Fiscal Vinculada",
+                "tabela_alvo_prefixo": "notas_fiscais",
+                "chaves_join": ["codigo_municipio", "numero_nota_fiscal"],
+                "colunas_exibicao": [
+                    {"label": "Data NF", "campo": "data_emissao", "tipo": "data"},
+                    {"label": "Valor Bruto", "campo": "valor_bruto", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Controle de bens": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/controle_bens_unidades_orcamentarias",
@@ -143,7 +241,28 @@
             "grid_financeiro": [
                 {"coluna": "valor_aquisicao", "label_caixa": "Valor de Aquisição"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "🔗 Empenhos do Bem",
+                "tabela_alvo_prefixo": "controle_besn_notas_empenho",
+                "chaves_join": ["codigo_municipio", "numero_tombamento"],
+                "colunas_exibicao": [
+                    {"label": "Nº Empenho", "campo": "numero_empenho", "tipo": "texto"},
+                    {"label": "Data", "campo": "data_emissao_empenho", "tipo": "data"}
+                ]
+            },
+            {
+                "titulo_secao": "📉 Reavaliações / Desincorporações",
+                "tabela_alvo_prefixo": "ajuste_reavaliacao_patrimonial_desincorporacao_bem_municipio",
+                "chaves_join": ["codigo_municipio", "numero_tombamento"],
+                "colunas_exibicao": [
+                    {"label": "Data", "campo": "data_avaliacao", "tipo": "data"},
+                    {"label": "Motivo", "campo": "motivo_ajuste_desincorporacao", "tipo": "texto"},
+                    {"label": "Valor Residual", "campo": "valor_residual_atualizado", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Ajuste, Reavaliação e Desincorporação": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/ajuste_reavaliacao_patrimonial_desincorporacao_bem_municipio",
@@ -190,7 +309,18 @@
             "grid_financeiro": [
                 {"coluna": "valor_empenhado", "label_caixa": "Valor Vinculado"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "📑 Empenho Original",
+                "tabela_alvo_prefixo": "notas_empenho",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Credor", "campo": "nome_negociante", "tipo": "texto"},
+                    {"label": "Valor (R$)", "campo": "valor_empenhado", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Contas Redutoras e Bens Incorporados": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/contas_redutoras_bens_incorporados_patrimonio_municipio",
@@ -236,7 +366,19 @@
                 {"coluna": "quantidade_item", "label_caixa": "Quantidade Fornecida"},
                 {"coluna": "valor_total_item", "label_caixa": "Valor Total do Item"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "🧾 Nota Fiscal Origem",
+                "tabela_alvo_prefixo": "notas_fiscais",
+                "chaves_join": ["codigo_municipio", "numero_nota_fiscal"],
+                "colunas_exibicao": [
+                    {"label": "Numéro NF", "campo": "numero_nota_fiscal", "tipo": "texto"},
+                    {"label": "CPF/CNPJ Emitente", "campo": "cpf_cnpj_emitente", "tipo": "texto"},
+                    {"label": "Valor Bruto NF", "campo": "valor_bruto", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Bens Incorporados ao Patrimônio": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/bens_incorporados_patrimonio_municipio",
@@ -259,7 +401,18 @@
             "grid_financeiro": [
                 {"coluna": "valor_bruto", "label_caixa": "Valor de Incorporação"}
             ]
-        }
+        },
+        "relacionamentos": [
+            {
+                "titulo_secao": "📑 Empenho Vinculado",
+                "tabela_alvo_prefixo": "notas_empenho",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Credor", "campo": "nome_negociante", "tipo": "texto"},
+                    {"label": "Valor", "campo": "valor_empenhado", "tipo": "moeda"}
+                ]
+            }
+        ]
     },
     "Veiculos Municipais": {
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/veiculos_municipais",

@@ -5,12 +5,14 @@ import glob
 import re
 import json
 import os
+import duckdb  # 🚀 O nosso novo motor relacional
+import pyarrow.parquet as pq # Para leitura dinâmica de Schemas
 from pathlib import Path
 from src.modules.extraction import carregar_municipios
 from src.components.details_modal import exibir_modal_detalhes
 from components.details_modal_pagamento import exibir_modal_detalhes_pagamento
 from modules.exportadores import renderizar_botoes_exportacao
-from components.details_modal import obter_caminho_arquivos_modal, carregar_e_filtrar_modal
+from components.details_modal import obter_caminho_arquivos_modal
 from components.dynamic_card import renderizar_card_dinamico
 
 anos = list(range(2008, 2027))
@@ -23,7 +25,6 @@ anos = list(range(2008, 2027))
 def carregar_configuracoes():
     """Carrega o endpoints.json da raiz do projeto espelhando a lógica de municípios"""
     try:
-        # Varre os caminhos mais prováveis até a raiz do projeto
         caminhos = [
             Path(__file__).resolve().parents[2] / 'endpoints.json',
             Path(__file__).resolve().parents[1] / 'endpoints.json',
@@ -45,7 +46,6 @@ def carregar_configuracoes():
         return {}
 config_endpoints = carregar_configuracoes()
 
-# FUNÇÕES DE HIGIENIZAÇÃO E CARGA
 @st.cache_data(show_spinner="Consolidando e higienizando base Parquet...")
 def carregar_e_filtrar(arquivos, colunas_texto=None):
     """Carrega os arquivos Parquet de forma geral e executa a limpeza das colunas correspondentes"""
@@ -62,21 +62,17 @@ def carregar_e_filtrar(arquivos, colunas_texto=None):
     if not dfs:
         return pd.DataFrame()
     
-    # Consolida os dados em um único DataFrame
     df = pd.concat(dfs, ignore_index=True)
 
-    # 1. Higienização das colunas de texto
     if colunas_texto:
         for col in colunas_texto.keys():
             if col in df.columns:
                 df[col] = df[col].fillna("").astype(str).str.strip()
                 
-    # 2.Identifica e corrige colunas monetárias ou numéricas
     colunas_numericas = [c for c in df.columns if 'valor' in c.lower() or 'quantidade' in c.lower() or 'qtd' in c.lower()]
     for col in colunas_numericas:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
         
-    # 3. Padronização geral de Strings (Colunas do tipo 'object' não numéricas)
     colunas_object = df.select_dtypes(include=['object']).columns
     for col in colunas_object:
         if colunas_texto and col in colunas_texto:
@@ -86,7 +82,6 @@ def carregar_e_filtrar(arquivos, colunas_texto=None):
     return df
 
 def formatar_moeda(valor):
-    """Formatador de valores monetarios"""
     try:
         if pd.isna(valor) or valor is None:
             return "0,00"
@@ -96,21 +91,17 @@ def formatar_moeda(valor):
         return "0,00"
 
 def formatar_data(data_raw):
-    """Formatação de dadas de forma geral"""
     try:
         if pd.isna(data_raw) or data_raw is None or str(data_raw).strip() == "":
             return "Não Informada"
             
-        # Converte para string e isola apenas a data caso venha com timestamp (T00:00:00)
         data_str = str(data_raw).split('T')[0].strip()
         
-        # Trata formato YYYY-MM-DD
         if '-' in data_str:
             partes = data_str.split('-')
             if len(partes) == 3:
                 return f"{partes[2]}/{partes[1]}/{partes[0]}"
                 
-        # Trata formato YYYYMMDD puro que algumas APIs retornam
         elif len(data_str) == 8 and data_str.isdigit():
             return f"{data_str[6:8]}/{data_str[4:6]}/{data_str[0:4]}"
             
@@ -119,7 +110,6 @@ def formatar_data(data_raw):
         return "Não Informada"
 
 def obter_caminho_arquivos(prefixo, ano, codigo_mun):
-    """Retorna o caminhom especifico de cada parquet"""
     if codigo_mun == "Todos":
         return sorted(glob.glob(f"data/{prefixo}_{ano}_*.parquet") + glob.glob(f"data/{prefixo}_{ano}.parquet"))
     mensais = glob.glob(f"data/{prefixo}_{ano}_*_{codigo_mun}.parquet")
@@ -133,7 +123,6 @@ def filtrar_dataframe(df, filtros_din, busca_geral, filtro_forn, config_atual):
     if df.empty: 
         return df
 
-    # 1. Filtros Dinâmicos da UI (Série NF, Quantidade, Status, etc)
     for campo, valor in filtros_din.items():
         if campo in df.columns and valor and valor != "TODOS":
             if isinstance(valor, (int, float)) and valor > 0:
@@ -141,7 +130,6 @@ def filtrar_dataframe(df, filtros_din, busca_geral, filtro_forn, config_atual):
             elif isinstance(valor, str):
                 df = df[df[campo].astype(str).str.upper().str.contains(valor.upper(), na=False)]
 
-    # 2. Busca Geral Dinâmica (Varre as colunas mapeadas no JSON)
     if busca_geral:
         termo = str(busca_geral).strip()
         mask_global = pd.Series(False, index=df.index)
@@ -156,7 +144,6 @@ def filtrar_dataframe(df, filtros_din, busca_geral, filtro_forn, config_atual):
         if regras: 
             df = df[mask_global]
 
-    # 3. Filtro de Fornecedor / Responsável
     if filtro_forn:
         termos_f = [t.strip() for t in filtro_forn.split(",") if t.strip()]
         col_fornecedores = ['nome_negociante', 'numero_documento_negociante', 'nome_responsavel_pagamento', 'cpf_cnpj_emitente', 'nome_emitente', 'razao_social', 'orgao']
@@ -179,7 +166,6 @@ def filtrar_dataframe(df, filtros_din, busca_geral, filtro_forn, config_atual):
 def render_consultation_page():
     st.header("🔍 Consulta Detalhada")
 
-    # 1. Trava de Segurança de Estado
     for k in ["consulta_realizada", "df_resultado", "filtros_aplicados"]:
         if k not in st.session_state: 
             st.session_state[k] = False if k == "consulta_realizada" else (pd.DataFrame() if k == "df_resultado" else {})
@@ -208,7 +194,6 @@ def render_consultation_page():
         filtros_dinamicos = {}
         schema_unificado = list(config_atual.get("campos_ui", []))
 
-        # Injeta colunas de texto como inputs de busca
         for col_id, col_label in config_atual.get("colunas_texto", {}).items():
             schema_unificado.append({
                 "id": col_id, "label": f"🏷️ {col_label}", "tipo": "text", "placeholder": f"Digite {col_label.lower()}..."
@@ -244,7 +229,7 @@ def render_consultation_page():
             btn_consultar = col_btn.button("Consultar", use_container_width=True)
 
     # ==============================================================================
-    # 3. DISPARO DA CONSULTA (O Controller)
+    # 3. DISPARO DA CONSULTA (O Controller Otimizado com DuckDB)
     # ==============================================================================
     if btn_consultar and ano_inicial <= ano_final:
         with st.spinner(f"Processando bases de {categoria_sel}..."):
@@ -252,24 +237,8 @@ def render_consultation_page():
             codigo_mun_busca = "Todos" if municipio_sel == "Todos" else opcoes_mun[municipio_sel]['codigo_municipio']
 
             dfs_anos = []
-            liq_map, pag_map = {}, {}
-            def get_col(df, nomes): return next((c for c in nomes if c in df.columns), None)
-
-            if categoria_sel == "Notas de Empenho":
-                df_liq_g, df_pg_g = pd.DataFrame(), pd.DataFrame()
-                for a in range(int(ano_inicial), int(ano_final) + 1):
-                    df_liq_g = pd.concat([df_liq_g, carregar_e_filtrar(obter_caminho_arquivos("liquidacoes", a, codigo_mun_busca))], ignore_index=True)
-                    df_pg_g = pd.concat([df_pg_g, carregar_e_filtrar(obter_caminho_arquivos("notas_pagamentos", a, codigo_mun_busca))], ignore_index=True)
-                
-                if not df_liq_g.empty:
-                    df_liq_g['ch'] = df_liq_g['codigo_municipio'].astype(str) + "_" + df_liq_g.get('exercicio_orcamento', '').astype(str) + "_" + df_liq_g['codigo_orgao'].astype(str) + "_" + df_liq_g['numero_empenho'].astype(str)
-                    c_liq = get_col(df_liq_g, ['valor_bruto_nota_liquidacao', 'valor_liquidado', 'valor_bruto'])
-                    if c_liq: liq_map = df_liq_g.groupby('ch')[c_liq].apply(lambda x: pd.to_numeric(x, errors='coerce').fillna(0).sum()).to_dict()
-
-                if not df_pg_g.empty:
-                    df_pg_g['ch'] = df_pg_g['codigo_municipio'].astype(str) + "_" + df_pg_g.get('exercicio_orcamento', '').astype(str) + "_" + df_pg_g['codigo_orgao'].astype(str) + "_" + df_pg_g['numero_empenho'].astype(str)
-                    pag_map = df_pg_g.groupby('ch')['valor_nota_pagamento'].apply(lambda x: pd.to_numeric(x, errors='coerce').fillna(0).sum()).to_dict()
-
+            
+            # --- 3.1 CARGA INICIAL DO OBJETO PRINCIPAL (Mais Limpo) ---
             for a in range(int(ano_inicial), int(ano_final) + 1):
                 arquivos = obter_caminho_arquivos(prefixo, a, codigo_mun_busca)
                 if not arquivos: continue
@@ -282,16 +251,98 @@ def render_consultation_page():
                 if df_ano.empty: continue
 
                 df_ano['match_reason'] = ""
-                if categoria_sel == "Notas de Empenho":
-                    df_ano['ch'] = df_ano['codigo_municipio'].astype(str) + "_" + df_ano.get('exercicio_orcamento', str(a)).astype(str) + "_" + df_ano['codigo_orgao'].astype(str) + "_" + df_ano['numero_empenho'].astype(str)
-                    df_ano['valor_liquidado'] = df_ano['ch'].map(liq_map).fillna(0.0)
-                    df_ano['valor_pago'] = df_ano['ch'].map(pag_map).fillna(0.0)
-                    df_ano['status_pagamento'] = df_ano.apply(lambda r: "PENDENTE" if float(r.get('valor_pago',0)) <= 0 else ("PAGO" if float(r.get('valor_pago',0)) >= float(r.get('valor_empenhado',0)) else "PARCIAL"), axis=1)
-
                 dfs_anos.append(df_ano)
 
             df_consolidado = pd.concat(dfs_anos, ignore_index=True) if dfs_anos else pd.DataFrame()
+            
+            # Aplica os filtros visuais do sistema ANTES do join (Reduz a carga)
             df_final = filtrar_dataframe(df_consolidado, filtros_dinamicos, filtro_geral, filtro_fornecedor, config_atual)
+
+            # --- 3.2 O MOTOR RELACIONAL DUCKDB PARA REFERENCIAMENTOS ---
+            if categoria_sel == "Notas de Empenho" and not df_final.empty:
+                con = duckdb.connect(database=':memory:')
+                con.register('df_emp', df_final)
+                
+                caminhos_liq = []
+                caminhos_pag = []
+                for a in range(int(ano_inicial), int(ano_final) + 1):
+                    caminhos_liq.extend(obter_caminho_arquivos("liquidacoes", a, codigo_mun_busca))
+                    caminhos_pag.extend(obter_caminho_arquivos("notas_pagamentos", a, codigo_mun_busca))
+                    
+                # Verifica quais arquivos realmente existem no HD
+                arquivos_liq_validos = [f"'{p}'" for p in caminhos_liq if os.path.exists(p)]
+                arquivos_pag_validos = [f"'{p}'" for p in caminhos_pag if os.path.exists(p)]
+
+                join_liq = ""
+                col_liq_final = "0.0 AS valor_liquidado,"
+                
+                # Inteligência de Schema: Descobre o nome da coluna correta na hora
+                if arquivos_liq_validos:
+                    nome_col_liq = "valor_liquidado"
+                    try:
+                        schema = pq.read_schema(arquivos_liq_validos[0].replace("'", ""))
+                        if 'valor_bruto_nota_liquidacao' in schema.names: nome_col_liq = 'valor_bruto_nota_liquidacao'
+                        elif 'valor_bruto' in schema.names: nome_col_liq = 'valor_bruto'
+                    except: pass
+
+                    join_liq = f"""
+                        LEFT JOIN (
+                            SELECT 
+                                CAST(codigo_municipio AS VARCHAR) as mun,
+                                CAST(codigo_orgao AS VARCHAR) as org,
+                                CAST(numero_empenho AS VARCHAR) as emp,
+                                SUM(TRY_CAST(COALESCE(NULLIF(CAST({nome_col_liq} AS VARCHAR), ''), '0') AS DOUBLE)) as total_liq
+                            FROM read_parquet([{', '.join(arquivos_liq_validos)}], union_by_name=True)
+                            GROUP BY 1, 2, 3
+                        ) AS l 
+                        ON CAST(e.codigo_municipio AS VARCHAR) = l.mun 
+                        AND CAST(e.codigo_orgao AS VARCHAR) = l.org 
+                        AND CAST(e.numero_empenho AS VARCHAR) = l.emp
+                    """
+                    col_liq_final = "COALESCE(l.total_liq, 0.0) AS valor_liquidado,"
+
+                join_pag = ""
+                col_pag_val = "0.0"
+                if arquivos_pag_validos:
+                    nome_col_pag = "valor_nota_pagamento"
+                    try:
+                        schema = pq.read_schema(arquivos_pag_validos[0].replace("'", ""))
+                        if 'valor_pago' in schema.names: nome_col_pag = 'valor_pago'
+                    except: pass
+
+                    join_pag = f"""
+                        LEFT JOIN (
+                            SELECT 
+                                CAST(codigo_municipio AS VARCHAR) as mun,
+                                CAST(codigo_orgao AS VARCHAR) as org,
+                                CAST(numero_empenho AS VARCHAR) as emp,
+                                SUM(TRY_CAST(COALESCE(NULLIF(CAST({nome_col_pag} AS VARCHAR), ''), '0') AS DOUBLE)) as total_pag
+                            FROM read_parquet([{', '.join(arquivos_pag_validos)}], union_by_name=True)
+                            GROUP BY 1, 2, 3
+                        ) AS p 
+                        ON CAST(e.codigo_municipio AS VARCHAR) = p.mun 
+                        AND CAST(e.codigo_orgao AS VARCHAR) = p.org 
+                        AND CAST(e.numero_empenho AS VARCHAR) = p.emp
+                    """
+                    col_pag_val = "COALESCE(p.total_pag, 0.0)"
+
+                # A Query Final: Injeta os totais de forma relacional direto na base fitrada
+                query = f"""
+                    SELECT 
+                        e.*,
+                        {col_liq_final}
+                        {col_pag_val} AS valor_pago,
+                        CASE 
+                            WHEN {col_pag_val} <= 0 THEN 'PENDENTE'
+                            WHEN {col_pag_val} >= TRY_CAST(COALESCE(NULLIF(CAST(e.valor_empenhado AS VARCHAR), ''), '0') AS DOUBLE) THEN 'PAGO'
+                            ELSE 'PARCIAL'
+                        END AS status_pagamento
+                    FROM df_emp AS e
+                    {join_liq}
+                    {join_pag}
+                """
+                
+                df_final = con.execute(query).df()
 
             st.session_state.df_resultado = df_final
             st.session_state.consulta_realizada = True
@@ -347,7 +398,7 @@ def render_consultation_page():
                     ano_final=filtros['ano_final'],
                     codigo_mun=filtros['codigo_mun_busca'],
                     obter_caminho_func=obter_caminho_arquivos_modal,
-                    carregar_e_filtrar_func=carregar_e_filtrar_modal 
+                    carregar_e_filtrar_func=carregar_e_filtrar # <-- Usa a função nativa do próprio consultation
                 )
         else:
             st.warning("Nenhum registro encontrado para os filtros aplicados.")

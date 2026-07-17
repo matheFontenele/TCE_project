@@ -49,7 +49,6 @@ CSS_CARDS = """
     .card-org { color: var(--primary-color, #ff4b4b); font-size: 0.85rem; font-weight: 600; }
     .card-date { color: var(--faded-text-color, #64748b); font-size: 0.85rem; font-weight: 600; }
 
-    /* CLASSE CORRIGIDA: Herda a cor do texto do usuário e aplica opacidade limpa */
     .card-detail-txt {
         font-size: 0.9rem; 
         line-height: 1.5; 
@@ -130,9 +129,15 @@ def renderizar_card_dinamico(row, index, categoria, config_atual, filtro_geral, 
 
     slot_id_montado = f"{label_topo.upper()}: {val_topo}"
 
-    # Badges auxiliares
+    # --- BLINDAGEM DE BADGES ---
     badge_match = f'<span class="match-badge">🔍 {r["match_reason"]}</span>' if r.get("match_reason") else ""
-    badge_status = f'<span class="status-badge status-{str(r["status_pagamento"]).lower()}">{r["status_pagamento"]}</span>' if "status_pagamento" in r and r["status_pagamento"] else ""
+    
+    badge_status = ""
+    status = r.get("status_pagamento")
+    # Garante que o status existe, não é NaN (Not a Number) e não é vazio
+    if status and not pd.isna(status) and str(status).strip() != "":
+        status_str = str(status).strip().upper()
+        badge_status = f'<span class="status-badge status-{status_str.lower()}">{status_str}</span>'
 
     # Grifador
     if filtro_geral:
@@ -183,7 +188,11 @@ def renderizar_card_dinamico(row, index, categoria, config_atual, filtro_geral, 
     st.markdown(card_box, unsafe_allow_html=True)
 
     if st.button("DETALHES 🔎", key=f"btn_det_{categoria}_{index}", use_container_width=True):
-        if categoria == "Notas de Pagamento":
-            exibir_modal_detalhes_pagamento(row, categoria, ano_inicial, codigo_mun_busca, id_unico=index)
-        else:
-            exibir_modal_detalhes(row, categoria, ano_inicial, codigo_mun_busca, id_unico=index)
+        exibir_modal_detalhes(
+            row=row, 
+            categoria=categoria, 
+            ano=ano_inicial, 
+            codigo_mun=codigo_mun_busca, 
+            config_atual=config_atual,
+            id_unico=index
+        )
