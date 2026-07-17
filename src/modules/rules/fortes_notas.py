@@ -202,7 +202,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     df_f = df_f.rename(columns={c: f'FORTES_{c}' for c in df_f.columns if not c.startswith('__') and not c.startswith('_debug')})
     df_t = df_t.rename(columns={c: f'TCE_{c}' for c in df_t.columns if not c.startswith('__') and not c.startswith('_debug')})
 
-    # --- 2. O PODER DO DUCKDB (Agrupando e Somando Pagamentos) ---
+    # --- 2. (Agrupando e Somando Pagamentos) ---
     caminhos_pag = [f.replace('notas_fiscais', 'notas_pagamentos') for f in caminhos_nf_tce]
     arquivos_pag_validos = []
     
@@ -222,7 +222,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     if arquivos_pag_validos:
         pag_files_str = "[" + ", ".join([f"'{p}'" for p in arquivos_pag_validos]) + "]"
         
-        # Faz um SUM e um MAX para pegar o total pago e a data mais recente daquele empenho
+        # Faz um SUM, um MAX e um STRING_AGG para consolidar as Notas de Pagamento
         join_pagamento = f"""
             LEFT JOIN (
                 SELECT 
@@ -230,6 +230,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
                     CAST(numero_empenho AS VARCHAR) AS numero_empenho,
                     SUM(CAST(valor_nota_pagamento AS DOUBLE)) AS valor_total_pago,
                     MAX(CAST(data_nota_pagamento AS VARCHAR)) AS ultima_data_pagamento,
+                    STRING_AGG(CAST(numero_nota_pagamento AS VARCHAR), ', ') AS numeros_notas_pagamento,
                     'Pago' AS flag_pagamento
                 FROM read_parquet({pag_files_str}, union_by_name=True)
                 WHERE numero_empenho IS NOT NULL
@@ -240,6 +241,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         """
         cols_pagamento = """
             COALESCE(pag.flag_pagamento, 'Não Pago') AS "Status Pagamento",
+            pag.numeros_notas_pagamento AS "Nº Nota de Pagamento",
             pag.valor_total_pago AS "Total Pago (R$ TCE)",
             pag.ultima_data_pagamento AS "Data Últ. Pagamento (TCE)"
         """
@@ -247,6 +249,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         join_pagamento = ""
         cols_pagamento = """
             'Sem Arquivo de Pagamento' AS "Status Pagamento", 
+            NULL AS "Nº Nota de Pagamento",
             NULL AS "Total Pago (R$ TCE)", 
             NULL AS "Data Últ. Pagamento (TCE)"
         """
@@ -268,6 +271,12 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     # Limpeza visual das colunas
     df_relatorio.columns = [c.replace('FORTES_', '') for c in df_relatorio.columns]
 
+    # Renomeando colunas para nível de usuário
+    df_relatorio = df_relatorio.rename(columns={
+        'Documento': 'Nº da Nota Fiscal'
+    })
+
+    # Ocultar colunas sujas/inúteis do Fortes
     colunas_para_remover = [
         'Valor do Serviço Selecionado', 
         'Valor do Produto Selecionado', 
@@ -292,10 +301,10 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         'Valor Multa Baixas Vencimentos',
         'Valor Juros Baixas Vencimentos Cheque',
         'Valor Juros Baixas Vencimentos',
-        'Cheque	Juros Vencimento Diversos',
+        'Cheque Juros Vencimento Diversos',
         'Multa Vencimento Diversos',
         'Descontos Vencimento Diversos',
-        'Desconto Incondicional'
+        'Desconto Incondicional',
         'RESIDUOTOTAL',
         'Código Natureza Operação',
         'Nome Natureza Operação',
@@ -378,7 +387,7 @@ def render_bloco_fortes():
         nf_f, data_f, valor_f, obs_f = 'Documento', 'Data de Emissão', 'Valor Total', 'Observação'
         nf_t, data_t, valor_t = 'numero_nota_fiscal', 'data_emissao', 'valor_liquido'
 
-        if st.button("🚀 Iniciar Auditoria Avançada", type="primary", use_container_width=True):
+        if st.button("Iniciar", type="primary", use_container_width=True):
             
             colunas_faltando_fortes = [c for c in [nf_f, data_f, valor_f, obs_f] if c not in df_fortes.columns]
             
