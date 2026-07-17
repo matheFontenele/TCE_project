@@ -436,7 +436,7 @@ def render_bloco_fortes():
                     st.download_button(
                         "📥 Baixar Relatório Completo (Excel)", 
                         data=converter_df_para_xlsx_estilizado(df_relatorio), 
-                        file_name="relatorio_auditoria_fortes_pagamentos.xlsx",
+                        file_name="relatorio_auditoria_fortesXtce.xlsx",
                         type="primary",
                         use_container_width=True
                     )
