@@ -144,7 +144,7 @@ def carregar_relatorio_fortes(arquivo_upload):
 # ==========================================
 # 🚀 MOTOR RELACIONAL (PANDAS + DUCKDB)
 # ==========================================
-def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t):
+def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t, municipio_selecionado):
     df_f = df_fortes.copy()
     df_t = df_tce.copy()
     
@@ -159,37 +159,45 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     df_f['_debug_nota'] = padronizar_documento(df_f[nf_f])
     df_t['_debug_nota'] = padronizar_documento(df_t[nf_t])
     
-    df_f['_debug_data'] = padronizar_data(df_f[data_f])
-    df_t['_debug_data'] = padronizar_data(df_t[data_t])
-    
     df_f['_debug_valor'] = padronizar_valor(df_f[valor_f])
     df_t['_debug_valor'] = padronizar_valor(df_t[valor_t])
     
     df_t['codigo_municipio'] = df_t['codigo_municipio'].astype(str).str.strip()
     df_t['numero_empenho'] = df_t['numero_empenho'].astype(str).str.strip()
+    df_t['_debug_mun'] = df_t['codigo_municipio'].astype(str).str.zfill(3)
 
-    meses_map = {'JAN': '01', 'FEV': '02', 'MAR': '03', 'ABR': '04', 'MAI': '05', 'JUN': '06',
-                 'JUL': '07', 'AGO': '08', 'SET': '09', 'OUT': '10', 'NOV': '11', 'DEZ': '12'}
-    
-    def get_comp_f(x):
-        x = str(x).upper().strip()
-        m = re.match(r'([A-Z]{3})/(\d{2,4})', x)
-        if m:
-            ano = m.group(2)
-            if len(ano) == 2: ano = '20' + ano
-            return f"{ano}-{meses_map.get(m.group(1), '00')}"
-        return 'SEM_COMP'
+    # --- O FAREJADOR DE MUNICÍPIOS ---
+    if municipio_selecionado != "Todos":
+        # Se escolheu na tela, cravamos o código no Fortes!
+        df_f['_debug_mun'] = str(municipio_selecionado).zfill(3)
+    else:
+        # Se escolheu "Todos", o Python vai ler a linha do Fortes e adivinhar a cidade
+        import unicodedata
+        def remover_acentos(txt):
+            return ''.join(c for c in unicodedata.normalize('NFD', str(txt)) if unicodedata.category(c) != 'Mn').upper()
+
+        dict_mun = carregar_dict_municipios()
+        # Ex: converte {'074': '(074) TAUÁ'} para {'TAUA': '074'}
+        mun_reverso = {remover_acentos(v.split(') ')[-1]): str(k).zfill(3) for k, v in dict_mun.items()}
         
-    def get_comp_t(x):
-        x = str(x).strip()
-        if len(x) >= 7 and x[4] == '-': return x[:7]
-        return 'SEM_COMP'
+        # Procura nas colunas que costumam ter o nome do cliente/cidade
+        colunas_busca = [c for c in df_f.columns if any(w in c.lower() for w in ['cliente', 'praça', 'praca', 'municipio', 'cidade', 'endereço', 'endereco'])]
+        if not colunas_busca: colunas_busca = df_f.columns
+        
+        df_f['_str_linha'] = df_f[colunas_busca].astype(str).agg(' '.join, axis=1).apply(remover_acentos)
+        
+        def achar_codigo_mun(row_limpa):
+            # Ordena os municípios do maior nome pro menor para garantir precisão
+            for nome, cod in sorted(mun_reverso.items(), key=lambda x: len(x[0]), reverse=True):
+                if re.search(rf'\b{nome}\b', str(row_limpa)):
+                    return cod
+            return "000"
+            
+        df_f['_debug_mun'] = df_f['_str_linha'].apply(achar_codigo_mun)
 
-    df_f['_debug_comp'] = df_f[obs_f].apply(get_comp_f) if obs_f in df_f.columns else 'SEM_COMP'
-    df_t['_debug_comp'] = df_t[data_t].apply(get_comp_t)
-
-    df_f['__CHAVE_MESTRA__'] = df_f['_debug_nota'] + "_" + df_f['_debug_comp'] + "_" + df_f['_debug_valor']
-    df_t['__CHAVE_MESTRA__'] = df_t['_debug_nota'] + "_" + df_t['_debug_comp'] + "_" + df_t['_debug_valor']
+    # --- A NOVA CHAVE MESTRA TRIPLA (BLINDAGEM ABSOLUTA) ---
+    df_f['__CHAVE_MESTRA__'] = df_f['_debug_nota'] + "_" + df_f['_debug_valor'] + "_" + df_f['_debug_mun']
+    df_t['__CHAVE_MESTRA__'] = df_t['_debug_nota'] + "_" + df_t['_debug_valor'] + "_" + df_t['_debug_mun']
     
     df_f = df_f[df_f['_debug_nota'] != '0']
     df_t = df_t[df_t['_debug_nota'] != '0']
@@ -199,7 +207,8 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     df_debug_f = df_f[cols_debug_f].head(300)
     df_debug_t = df_t[cols_debug_t].head(300)
 
-    df_f = df_f.rename(columns={c: f'FORTES_{c}' for c in df_f.columns if not c.startswith('__') and not c.startswith('_debug')})
+    # Removemos as colunas auxiliares sujas para não aparecerem no relatório final
+    df_f = df_f.rename(columns={c: f'FORTES_{c}' for c in df_f.columns if not c.startswith('__') and not c.startswith('_debug') and not c.startswith('_str')})
     df_t = df_t.rename(columns={c: f'TCE_{c}' for c in df_t.columns if not c.startswith('__') and not c.startswith('_debug')})
 
     # --- 2. (Agrupando e Somando Pagamentos) ---
@@ -254,10 +263,14 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             NULL AS "Data Últ. Pagamento (TCE)"
         """
 
-    # Query Mestra: Fortes + TCE + Pagamentos Agrupados
+    # Monta a lista de colunas para excluir dinamicamente (evita erro caso a coluna _str_linha não exista)
+    colunas_excluir = [c for c in ['__CHAVE_MESTRA__', '_debug_nota', '_debug_valor', '_debug_mun', '_str_linha'] if c in df_f.columns]
+    str_exclude = ", ".join(colunas_excluir)
+
+    # Query Mestra atualizada para limpar as colunas novas geradas dinamicamente
     query = f"""
         SELECT 
-            f.* EXCLUDE (__CHAVE_MESTRA__, _debug_nota, _debug_data, _debug_valor, _debug_comp),
+            f.* EXCLUDE ({str_exclude}),
             CASE WHEN t.__CHAVE_MESTRA__ IS NOT NULL THEN 'Encontrado' ELSE 'Não Encontrado' END AS "Status TCE",
             t.TCE_numero_empenho AS "Empenho Vinculado",
             {cols_pagamento}
@@ -396,9 +409,9 @@ def render_bloco_fortes():
             else:
                 with st.spinner("DuckDB Relacional: Extraindo Pagamentos e Consolidando Relatório..."):
                     df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, qtd_pagas, df_debug_f, df_debug_t = processar_cruzamento_fortes(
-                        df_fortes, df_tce_filtrado, caminhos_completos, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t
+                        df_fortes, df_tce_filtrado, caminhos_completos, nf_f, data_f, valor_f, obs_f, nf_t, data_t, valor_t, f_arq_mun
                     )
-                    
+                                    
                     st.markdown("### 🎯 Resultados da Auditoria")
                     m1, m2, m3, m4, m5 = st.columns(5)
                     m1.metric("✅ Encontrados (TCE)", f"{qtd_ambos:,}".replace(',', '.'))

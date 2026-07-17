@@ -46,6 +46,16 @@
                     {"label": "Nº Caixa", "campo": "numero_documento_caixa", "tipo": "texto"},
                     {"label": "Valor (R$)", "campo": "valor_nota_pagamento", "tipo": "moeda"}
                 ]
+            },
+            {
+                "titulo_secao": "🧾 Notas Fiscais Vinculadas",
+                "tabela_alvo_prefixo": "notas_fiscais",
+                "chaves_join": ["codigo_municipio", "numero_empenho"],
+                "colunas_exibicao": [
+                    {"label": "Data", "campo": "data_emissao", "tipo": "data"},
+                    {"label": "Nº NF", "campo": "numero_nota_fiscal", "tipo": "texto"},
+                    {"label": "Valor Bruto", "campo": "valor_bruto", "tipo": "moeda"}
+                ]
             }
         ]
     },
