@@ -249,7 +249,10 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             AND t.TCE_numero_empenho = pag.numero_empenho
         """
         cols_pagamento = """
-            COALESCE(pag.flag_pagamento, 'Não Pago') AS "Status Pagamento",
+            CASE 
+                WHEN t.__CHAVE_MESTRA__ IS NULL THEN ''
+                ELSE COALESCE(pag.flag_pagamento, 'Não Pago') 
+            END AS "Status Pagamento",
             pag.numeros_notas_pagamento AS "Nº Nota de Pagamento",
             pag.valor_total_pago AS "Total Pago (R$ TCE)",
             pag.ultima_data_pagamento AS "Data Últ. Pagamento (TCE)"
