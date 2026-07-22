@@ -325,7 +325,7 @@ def processar_lote(task):
         # 👻 CACHE NEGATIVO 2: A API não retornou absolutamente nada.
         if int(task['ano_referencia']) < ano_atual:
             pd.DataFrame().to_parquet(caminho_arquivo, engine='pyarrow', compression='snappy')
-            return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Fantasma gerado (Poupará a API futuramente)."
+            return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Ignorando Requisição."
 
         return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Sem registros (Ignorado no cache de {ano_atual})."
 
