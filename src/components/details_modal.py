@@ -29,12 +29,23 @@ def formatar_data_modal(data_raw):
         return data_str
     except: return "Não Informada"
 
-def obter_caminho_arquivos_modal(prefixo, ano, codigo_mun):
+def obter_caminho_arquivos_modal(prefixo, ano_base, codigo_mun):
+    """
+    Busca TODOS os arquivos daquele prefixo e município, ignorando o ano_base.
+    Isso previne o sumiço de 'Restos a Pagar' (ex: NF de 2024 paga em 2025).
+    """
     if codigo_mun == "Todos":
-        return sorted(glob.glob(f"data/{prefixo}_{ano}_*.parquet") + glob.glob(f"data/{prefixo}_{ano}.parquet"))
-    mensais = glob.glob(f"data/{prefixo}_{ano}_*_{codigo_mun}.parquet")
-    anuais = glob.glob(f"data/{prefixo}_{ano}_{codigo_mun}.parquet")
-    return sorted(mensais + anuais)
+        # Pega qualquer arquivo que comece com o prefixo
+        arquivos = glob.glob(f"data/{prefixo}_*.parquet")
+    else:
+        # Pega arquivos mensais específicos do município E arquivos anuais específicos do município
+        arquivos_mensais = glob.glob(f"data/{prefixo}_*_{codigo_mun}.parquet")
+        arquivos_anuais = glob.glob(f"data/{prefixo}_*_{codigo_mun}.parquet") 
+        # A busca acima já cobre ambos formatos (AAAA_MM_MUN e AAAA_MUN), mas vamos garantir:
+        todos_municipio = glob.glob(f"data/{prefixo}_*_{codigo_mun}.parquet")
+        arquivos = todos_municipio
+        
+    return sorted(list(set(arquivos))) # O 'set' remove duplicatas caso a busca cruze nomes
 
 def normalizar_chave(valor):
     if pd.isna(valor) or valor is None: return ""
@@ -86,6 +97,8 @@ def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id
     cod_municipio = str(row.get('codigo_municipio', '')).strip()
     cod_orgao = str(row.get('codigo_orgao', '')).strip()
     cod_unidade = str(row.get('codigo_unidade_orcamentaria', '')).strip()
+    
+    ano_real_doc = str(row.get('exercicio_orcamento', ano))[:4]
     
     st.write(f"### {categoria.upper()} Nº {infos['numero']}")
     municipio_nome = row.get('municipio_referencia', 'Não Informado')
@@ -146,7 +159,7 @@ def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id
                     st.caption("Sem dados.")
                     continue
                 
-                arquivos_alvo = obter_caminho_arquivos_modal(prefixo_alvo, ano, codigo_mun)
+                arquivos_alvo = obter_caminho_arquivos_modal(prefixo_alvo, ano_real_doc, codigo_mun)
                 arquivos_alvo_validos = [f for f in arquivos_alvo if os.path.exists(f)]
                 
                 if not arquivos_alvo_validos:
