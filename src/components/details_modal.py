@@ -31,21 +31,24 @@ def formatar_data_modal(data_raw):
 
 def obter_caminho_arquivos_modal(prefixo, ano_base, codigo_mun):
     """
-    Busca TODOS os arquivos daquele prefixo e município, ignorando o ano_base.
-    Isso previne o sumiço de 'Restos a Pagar' (ex: NF de 2024 paga em 2025).
+    Busca os arquivos filtrando o passado. Mantém o ano base e anos futuros (Restos a Pagar).
     """
     if codigo_mun == "Todos":
-        # Pega qualquer arquivo que comece com o prefixo
         arquivos = glob.glob(f"data/{prefixo}_*.parquet")
     else:
-        # Pega arquivos mensais específicos do município E arquivos anuais específicos do município
-        arquivos_mensais = glob.glob(f"data/{prefixo}_*_{codigo_mun}.parquet")
-        arquivos_anuais = glob.glob(f"data/{prefixo}_*_{codigo_mun}.parquet") 
-        # A busca acima já cobre ambos formatos (AAAA_MM_MUN e AAAA_MUN), mas vamos garantir:
-        todos_municipio = glob.glob(f"data/{prefixo}_*_{codigo_mun}.parquet")
-        arquivos = todos_municipio
+        arquivos = glob.glob(f"data/{prefixo}_*_{codigo_mun}.parquet")
         
-    return sorted(list(set(arquivos))) # O 'set' remove duplicatas caso a busca cruze nomes
+    arquivos_validos = []
+    for arq in arquivos:
+        match = re.search(r'_(\d{4})(?:_|\.)', arq)
+        if match:
+            ano_arquivo = int(match.group(1))
+            if ano_arquivo >= int(ano_base):
+                arquivos_validos.append(arq)
+        else:
+            arquivos_validos.append(arq)
+            
+    return sorted(list(set(arquivos_validos)))# O 'set' remove duplicatas caso a busca cruze nomes
 
 def normalizar_chave(valor):
     if pd.isna(valor) or valor is None: return ""
@@ -70,13 +73,13 @@ def buscar_nome_orgao_api(codigo_municipio: str, ano_exercicio: str, codigo_orga
 def extrair_informacoes_principais(row):
     infos = {"numero": "Não Informado", "data": "Não Informada", "valor": 0.0, "fornecedor": "Não Informado", "doc_fornecedor": "Ocultado"}
     
-    for k in ['numero_nota_fiscal', 'numero_empenho', 'numero_nota_pagamento', 'numero_contrato', 'numero_tombamento']:
+    for k in ['numero_nota_fiscal', 'numero_empenho', 'numero_nota_pagamento', 'numero_contrato', 'numero_tombamento', 'numero_documento_despesa_extra']:
         if k in row and not pd.isna(row[k]): infos["numero"] = str(row[k]).replace('.0', ''); break
-    for k in ['data_emissao', 'data_emissao_empenho', 'data_nota_pagamento', 'data_aquisicao', 'data_incorporacao']:
+    for k in ['data_emissao', 'data_emissao_empenho', 'data_nota_pagamento', 'data_aquisicao', 'data_incorporacao', 'data_emissao_despesa_extra']:
         if k in row and not pd.isna(row[k]): infos["data"] = row[k]; break
-    for k in ['valor_liquido', 'valor_bruto', 'valor_empenhado', 'valor_nota_pagamento', 'valor_aquisicao', 'valor_total_item']:
+    for k in ['valor_liquido', 'valor_bruto', 'valor_empenhado', 'valor_nota_pagamento', 'valor_aquisicao', 'valor_total_item', 'valor_documento_despesa_extra', 'valor_liquidado']:
         if k in row and not pd.isna(row[k]): infos["valor"] = float(row[k]); break
-    for k in ['nome_negociante', 'nome_responsavel_pagamento', 'nome_credor', 'nome_proprietario']:
+    for k in ['nome_negociante', 'nome_responsavel_pagamento', 'nome_credor', 'nome_proprietario', 'nome_credor_despesa_extra']:
         if k in row and not pd.isna(row[k]) and str(row[k]).strip(): infos["fornecedor"] = str(row[k]); break
     for k in ['numero_documento_negociante', 'cpf_responsavel_pagamento', 'cpf_cnpj_emitente']:
         if k in row and not pd.isna(row[k]) and str(row[k]).strip(): infos["doc_fornecedor"] = str(row[k]); break
@@ -89,8 +92,10 @@ def extrair_informacoes_principais(row):
 @st.dialog("📋 Detalhes do Documento", width="large")
 def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id_unico=None):
     
-    # Validação de segurança
+    # Validação de segurança e extração do dicionário
     if config_atual is None: config_atual = {}
+    dicionario_nomes = config_atual.get("colunas_texto", {}) # Puxa o tradutor do JSON
+    layout = config_atual.get("layout_card", {})
 
     infos = extrair_informacoes_principais(row)
     
@@ -128,10 +133,15 @@ def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id
         with col2: st.markdown(f"**Órgão:** `{cod_orgao}` — {nome_orgao if nome_orgao else 'Não identificado'}")
         st.divider()
 
-    # Histórico Flexível (Mapeado pelo JSON)
-    desc_key = config_atual.get("layout_card", {}).get("corpo_texto", "")
+    # ==============================================================================
+    # 📜 DESCRIÇÃO DINÂMICA (Traduzida)
+    # ==============================================================================
+    desc_key = layout.get("corpo_texto", "")
     if desc_key and desc_key in row and not pd.isna(row[desc_key]):
-        st.markdown("#### 📜 Descrição")
+        # Busca o nome bonito no dicionário. Se não achar, formata a string crua.
+        label_desc = dicionario_nomes.get(desc_key, desc_key).replace('_', ' ').title()
+        
+        st.markdown(f"#### 📜 {label_desc}") # Agora imprime, por exemplo: "Histórico Do Empenho"
         st.info(row[desc_key])
         st.divider()
 
@@ -169,15 +179,66 @@ def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id
                 clausulas_where = []
                 for chave in chaves_join:
                     valor_linha_limpo = normalizar_chave(row[chave])
-                    
-                    # TÁTICA "SNIPER DUPLO":
-                    # 1. Compara como texto (Ignora '.0' do Parquet e junta letras se houver)
-                    # 2. Compara como BIGINT (Resolve o problema do Pandas remover os Zeros à esquerda ex: '074' vira '74')
                     clausulas_where.append(f"""(
                         regexp_replace(CAST({chave} AS VARCHAR), '\.0$', '') = '{valor_linha_limpo}' 
                         OR TRY_CAST(regexp_replace(CAST({chave} AS VARCHAR), '\.0$', '') AS BIGINT) = TRY_CAST('{valor_linha_limpo}' AS BIGINT)
                     )""")
                 
+                try:
+                    df_cols = duckdb.query(f"DESCRIBE SELECT * FROM read_parquet('{arquivos_alvo_validos[0]}')").df()
+                    colunas_alvo = df_cols['column_name'].tolist()
+                except:
+                    colunas_alvo = []
+
+                # =====================================================================
+                # 2. MONTAGEM DAS REGRAS DE JOIN (Com tradução automática)
+                # =====================================================================
+                clausulas_where = []
+                for chave in chaves_join:
+                    valor_linha_limpo = normalizar_chave(row[chave])
+                    
+                    # O Camaleão entra em ação: se a chave original não existir no alvo, traduz.
+                    chave_alvo = chave
+                    if colunas_alvo and chave_alvo not in colunas_alvo:
+                        if chave == 'numero_nota_empenho' and 'numero_empenho' in colunas_alvo:
+                            chave_alvo = 'numero_empenho'
+                        elif chave == 'numero_empenho' and 'numero_nota_empenho' in colunas_alvo:
+                            chave_alvo = 'numero_nota_empenho'
+                            
+                    clausulas_where.append(f"""(
+                        regexp_replace(CAST({chave_alvo} AS VARCHAR), '\.0$', '') = '{valor_linha_limpo}' 
+                        OR TRY_CAST(regexp_replace(CAST({chave_alvo} AS VARCHAR), '\.0$', '') AS BIGINT) = TRY_CAST('{valor_linha_limpo}' AS BIGINT)
+                    )""")
+
+                # =====================================================================
+                # 3. O EXTERMINADOR DE FANTASMAS (Agora mais rápido)
+                # =====================================================================
+                if colunas_alvo:
+                    # Trava 1: Ano (Exercicio)
+                    if 'exercicio_orcamento' in colunas_alvo and 'exercicio_orcamento' in row and not pd.isna(row['exercicio_orcamento']):
+                        valor_ano = normalizar_chave(row['exercicio_orcamento'])
+                        if valor_ano:
+                            clausulas_where.append(f"(CAST(exercicio_orcamento AS VARCHAR) = '{valor_ano}')")
+                        
+                    # Trava 2: Código do Órgão (Sniper Duplo)
+                    if 'codigo_orgao' in colunas_alvo and 'codigo_orgao' in row and not pd.isna(row['codigo_orgao']):
+                        valor_orgao = normalizar_chave(row['codigo_orgao'])
+                        if valor_orgao:
+                            clausulas_where.append(f"""(
+                                regexp_replace(CAST(codigo_orgao AS VARCHAR), '\.0$', '') = '{valor_orgao}' 
+                                OR TRY_CAST(regexp_replace(CAST(codigo_orgao AS VARCHAR), '\.0$', '') AS BIGINT) = TRY_CAST('{valor_orgao}' AS BIGINT)
+                            )""")
+                        
+                    # Trava 3: Código da Unidade Orçamentária (Sniper Duplo)
+                    if 'codigo_unidade_orcamentaria' in colunas_alvo and 'codigo_unidade_orcamentaria' in row and not pd.isna(row['codigo_unidade_orcamentaria']):
+                        valor_uo = normalizar_chave(row['codigo_unidade_orcamentaria'])
+                        if valor_uo:
+                            clausulas_where.append(f"""(
+                                regexp_replace(CAST(codigo_unidade_orcamentaria AS VARCHAR), '\.0$', '') = '{valor_uo}' 
+                                OR TRY_CAST(regexp_replace(CAST(codigo_unidade_orcamentaria AS VARCHAR), '\.0$', '') AS BIGINT) = TRY_CAST('{valor_uo}' AS BIGINT)
+                            )""")
+                
+                # Junta todas as regras e executa!
                 where_sql = " AND ".join(clausulas_where)
                 files_str = "[" + ", ".join([f"'{f}'" for f in arquivos_alvo_validos]) + "]"
 
@@ -217,8 +278,10 @@ def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id
                     st.error(f"Erro SQL: {e}")
         st.divider()
 
-    # Expander de Dados Brutos (Movido para o final da tela)
-    with st.expander("🛠️ Ver Todos os Dados Extraídos", expanded=False):
+    # ==============================================================================
+    # TABELA DE DADOS BRUTOS (Com Tradutor de Nomes Ativado)
+    # ==============================================================================
+    with st.expander("🛠️ Ver Todos os Dados Detalhados", expanded=False):
         dict_row = dict(row)
         chaves_relevantes = {k: v for k, v in dict_row.items() if not pd.isna(v) and str(v).strip() != "" and not k.startswith('_')}
         
@@ -227,7 +290,13 @@ def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id
             val_formatado = str(v)
             if 'valor' in k.lower() and isinstance(v, (int, float)): val_formatado = f"R$ {formatar_moeda_modal(v)}"
             elif 'data' in k.lower(): val_formatado = formatar_data_modal(v)
-            html_table += f"<tr style='border-bottom: 1px solid #ddd;'><td style='padding:8px; font-weight:600; color:#555;'>{k}</td><td style='padding:8px;'>{val_formatado}</td></tr>"
+            
+            # --- MÁGICA DA TRADUÇÃO AQUI ---
+            # Busca o nome bonito no dicionário. Se a coluna for genérica (ex: 'data_referencia'), 
+            # ele limpa os underscores automaticamente.
+            nome_amigavel = dicionario_nomes.get(k, k).replace("_", " ").title()
+            
+            html_table += f"<tr style='border-bottom: 1px solid #ddd;'><td style='padding:8px; font-weight:600; color:#555;'>{nome_amigavel}</td><td style='padding:8px;'>{val_formatado}</td></tr>"
         html_table += "</table>"
         st.markdown(html_table, unsafe_allow_html=True)
 

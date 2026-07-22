@@ -76,11 +76,9 @@
             "titulo_grande": "cpf_cnpj_emitente",
             "meta_1": "municipio_referencia",
             "meta_2": "data_emissao",
-            "corpo_texto": "numero_empenho",
+            "corpo_texto": "numero_chave_acesso_nfe",
             "grid_financeiro": [
-                {"coluna": "valor_liquido", "label_caixa": "Valor Liquido NF"},
-                {"coluna": "valor_aliquota_iss", "label_caixa": "Aliquota ISS"},
-                {"coluna": "valor_bruto", "label_caixa": "Valor Bruto NF"}
+                {"coluna": "valor_bruto", "label_caixa": "Valor da NF"}
             ]
         },
         "relacionamentos": [
@@ -273,7 +271,7 @@
             "titulo_grande": "nome_credor_despesa_extra",
             "meta_1": "municipio_referencia",
             "meta_2": "data_emissao_despesa_extra",
-            "corpo_texto": "codigo_conta_extraorcamentaria",
+            "corpo_texto": "nome_credor_despesa_extra",
             "grid_financeiro": [
                 {"coluna": "valor_documento_despesa_extra", "label_caixa": "Valor da Despesa"},
                 {"coluna": "valor_deducao_despesa_extra", "label_caixa": "Valor de Dedução"}
@@ -342,7 +340,7 @@
         "parametros_obrigatorios": ["exercicio_orcamento", "codigo_municipio", "data_referencia_doc"],
         "campos_ui": [],
         "colunas_texto": {
-            "descricao_historico_nota_liquidacao": "Histórico de Liquidação",
+            "nome_responsavel_liquidacao": "Responsavel da Liquidação",
             "historico": "Histórico de Liquidação",
             "numero_nota_liquidacao": "Nº Liquidação",
             "numero_nota_fiscal": "Nº Nota Fiscal Vinculada",
@@ -353,8 +351,8 @@
             "topo_esq": "numero_nota_liquidacao",
             "titulo_grande": "numero_empenho",
             "meta_1": "municipio_referencia",
-            "meta_2": "data_nota_liquidacao",
-            "corpo_texto": "descricao_historico_nota_liquidacao",
+            "meta_2": "data_liquidacao",
+            "corpo_texto": "nome_responsavel_liquidacao",
             "grid_financeiro": [
                 {"coluna": "valor_bruto_nota_liquidacao", "label_caixa": "Valor Liquidado"}
             ]
@@ -567,16 +565,16 @@
             "numero_nota_fiscal": "Nº Nota Fiscal",
             "descricao_item": "Descrição do Item",
             "numero_nota_empenho": "Nº Empenho Vinculado",
-            "numero_empenho": "Nº Empenho"
+            "numero_item_sequencial": "Nº de Item Sequancial"
         },
         "layout_card": {
             "topo_esq": "numero_nota_fiscal",
-            "titulo_grande": "descricao_item",
+            "titulo_grande": "numero_nota_empenho",
             "meta_1": "municipio_referencia",
             "meta_2": "data_emissao",
-            "corpo_texto": "numero_empenho",
+            "corpo_texto": "descricao_item",
             "grid_financeiro": [
-                {"coluna": "quantidade_item", "label_caixa": "Quantidade Fornecida"},
+                {"coluna": "valor_unitario_item", "label_caixa": "Valor Unitario do Item"},
                 {"coluna": "valor_total_item", "label_caixa": "Valor Total do Item"}
             ]
         },
