@@ -225,11 +225,12 @@ def obter_sessao(forcar_nova=False):
     return thread_local.session
 
 # Função que processa cada tarefa individualmente, responsável por fazer a requisição, aplicar o filtro defensivo e salvar o arquivo parquet
+# Função que processa cada tarefa individualmente, responsável por fazer a requisição, aplicar o filtro defensivo e salvar o arquivo parquet
 def processar_lote(task):
     caminho_arquivo = task['caminho_arquivo']
     nome_arquivo = os.path.basename(caminho_arquivo)
     
-    # Checkpoint: se o arquivo já existe, pula
+    # Checkpoint: se o arquivo já existe (seja com dados ou fantasma), pula instantaneamente!
     if os.path.exists(caminho_arquivo):
         return "IGNORADO", f"⏭️ Ignorado: {nome_arquivo} já existe."
 
@@ -272,11 +273,8 @@ def processar_lote(task):
                         return "ERRO_CONEXAO", f"❌ Derrubado pelo TCE após {max_tentativas} tentativas em {nome_arquivo}: {str(e)}"
                     
                     # Se deu erro de SSL/Conexão, fechamos a conexão atual para não travar o pool
-                    # e forçamos o backoff exponencial mais agressivo
                     tempo_espera = (tentativa + 1) * 7
                     time.sleep(tempo_espera)
-                    
-                    # Recarrega uma sessão limpa caso a anterior tenha sido "sujada" pelo handshake quebrado
                     session = obter_sessao(forcar_nova=True)
             
             # Executa a validação se a resposta de rede foi bem-sucedida
@@ -292,10 +290,13 @@ def processar_lote(task):
                     break
                 
                 start_index += count_limite  # Avança o ponteiro para a próxima página
-                time.sleep(0.5)  # Aumentado levemente para dar respiro ao servidor deles entre páginas
+                time.sleep(0.5)
             else:
                 status_atual = response.status_code if response is not None else "Sem Resposta"
                 return "ERRO_API", f"❌ Erro na API para {nome_arquivo}: Status {status_atual}"
+
+        # Captura o ano em que o script está rodando para a regra do Cache Negativo
+        ano_atual = datetime.date.today().year
 
         if todos_dados:
             df = pd.DataFrame(todos_dados)
@@ -310,14 +311,23 @@ def processar_lote(task):
                 df = df.drop(columns=['exercicio_orcamento_str'])
             
             if df.empty:
-                return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Dados descartados por inconsistência de ano."
+                # 👻 CACHE NEGATIVO 1: A API mandou lixo de outro ano.
+                if int(task['ano_referencia']) < ano_atual:
+                    pd.DataFrame().to_parquet(caminho_arquivo, engine='pyarrow', compression='snappy')
+                    return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Lixo descartado. Fantasma criado."
+                return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Descartado por inconsistência de ano."
             # ==============================================================
 
             df['municipio_referencia'] = task['municipio_nome']
             df.to_parquet(caminho_arquivo, engine='pyarrow', compression='snappy')
             return "BAIXADO", f"✅ Criado com sucesso: {nome_arquivo} ({len(df)} linhas)"
 
-        return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Sem registros no TCE."
+        # 👻 CACHE NEGATIVO 2: A API não retornou absolutamente nada.
+        if int(task['ano_referencia']) < ano_atual:
+            pd.DataFrame().to_parquet(caminho_arquivo, engine='pyarrow', compression='snappy')
+            return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Fantasma gerado (Poupará a API futuramente)."
+
+        return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Sem registros (Ignorado no cache de {ano_atual})."
 
     except Exception as e:
         return "ERRO_CONEXAO", f"❌ Erro inesperado em {nome_arquivo}: {str(e)}"
