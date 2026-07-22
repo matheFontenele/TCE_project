@@ -365,7 +365,6 @@ def render_consultation_page():
         if not df.empty:
             st.caption(f"Foram encontrados **{len(df):,}** registros.")
 
-            # A RENDERIZAÇÃO LIMPA E DESACOPLADA:
             limite = 20
             for index, row in df.head(limite).iterrows():
                 renderizar_card_dinamico(
@@ -390,7 +389,7 @@ def render_consultation_page():
                 file_name=f"TCE_{filtros['prefixo']}_{filtros['ano_inicial']}_{filtros['ano_final']}.csv", 
                 mime="text/csv", use_container_width=True
             )
-            
+
             if filtros['categoria_sel'] == "Notas de Empenho":
                 renderizar_botoes_exportacao(
                     df_empenhos_filtrados=df,
@@ -398,7 +397,7 @@ def render_consultation_page():
                     ano_final=filtros['ano_final'],
                     codigo_mun=filtros['codigo_mun_busca'],
                     obter_caminho_func=obter_caminho_arquivos_modal,
-                    carregar_e_filtrar_func=carregar_e_filtrar # <-- Usa a função nativa do próprio consultation
+                    carregar_e_filtrar_func=carregar_e_filtrar
                 )
         else:
             st.warning("Nenhum registro encontrado para os filtros aplicados.")
