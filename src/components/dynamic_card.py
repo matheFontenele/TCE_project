@@ -123,13 +123,21 @@ def renderizar_card_dinamico(row, index, categoria, config_atual, filtro_geral, 
     val_titulo = str(r.get(col_titulo, "Título não mapeado")).strip()
     val_meta1  = str(r.get(col_meta1, "Local indisponível")).strip()
     val_meta2  = _formatar_data(r.get(col_meta2))
-    val_corpo  = str(r.get(col_corpo, "Sem descrição.")).strip()
 
-    # --- CRIAÇÃO DOS LABELS USANDO O DICIONÁRIO DO JSON ---
+    if isinstance(col_corpo, list):
+        # Se for lista (Ex: Veículos), junta os valores válidos com " - "
+        partes = [str(r.get(c, "")).strip() for c in col_corpo if pd.notna(r.get(c)) and str(r.get(c, "")).strip() != ""]
+        val_corpo = " - ".join(partes) if partes else "Sem descrição."
+        label_corpo = "Especificações"
+    else:
+        # Se for string normal (Ex: Empenhos), pega direto
+        val_corpo  = str(r.get(col_corpo, "Sem descrição.")).strip()
+        label_corpo = dicionario_nomes.get(col_corpo, col_corpo).replace("_", " ").title()
+
+    # --- CRIAÇÃO DOS LABELS RESTANTES ---
     label_topo   = dicionario_nomes.get(col_topo, col_topo).replace("_", " ").title()
     label_titulo = dicionario_nomes.get(col_titulo, col_titulo).replace("_", " ").title()
-    label_corpo  = dicionario_nomes.get(col_corpo, col_corpo).replace("_", " ").title()
-
+    
     slot_id_montado = f"{label_topo.upper()}: {val_topo}"
 
     # --- BLINDAGEM DE BADGES ---

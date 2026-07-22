@@ -605,14 +605,12 @@
             "cor_predominante": "Cor"
         },
         "layout_card": {
-            "topo_esq": "odometro",
-            "titulo_grande": "marca",
+            "topo_esq": "codigo_placa",
+            "titulo_grande": "modelo_versao",
             "meta_1": "codigo_municipio",
             "meta_2": "nome_proprietario",
-            "corpo_texto": "modelo_versao",
-            "grid_financeiro": [
-                {"coluna": "odometro", "label_caixa": "Odometro"}
-            ]
+            "corpo_texto": ["marca", "modelo_versao", "ano_modelo"],
+            "grid_financeiro": []
         },
         "relacionamentos": []
     },
@@ -629,12 +627,60 @@
             "codigo_finalidade_veiculo": "Codigo Finalidade do Veiculo"
         },
         "layout_card": {
-            "topo_esq": "numero_tombamento",
-            "titulo_grande": "especificacao_bem",
+            "topo_esq": "numero_odometro",
+            "titulo_grande": "codigo_renavam",
             "meta_1": "codigo_municipio",
             "meta_2": "data_inclusao_uo",
             "corpo_texto": "descricao_bem",
             "grid_financeiro": []
+        },
+        "relacionamentos": []
+    },
+    "Controle Abastecimento de Veiculos": {
+        "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/controle_abastecimento_veiculos",
+        "prefixo": "controle_abastecimento_veiculos",
+        "frequencia": "mensal",
+        "parametros_obrigatorios": ["codigo_municipio", "data_referencia_doc"],
+        "campos_ui": [],
+        "colunas_texto": {
+            "codigo_municipio": "Codigo do Municipio",
+            "nome_fornecedor": "Nome Fornecedor",
+            "nome_servidor_responsavel": "Nome Servidor Responsavel"
+        },
+        "layout_card": {
+            "topo_esq": "codigo_renavam",
+            "titulo_grande": "nome_fornecedor",
+            "meta_1": "codigo_municipio",
+            "meta_2": "data_abastecimento",
+            "corpo_texto": ["nome_servidor_responsavel"],
+            "grid_financeiro": [
+                {"coluna": "valor_unidade_combustivel", "label_caixa": "Valor Unitario do Combustivel"},
+                {"coluna": "valor_total_abastecimento", "label_caixa": "Valor Total do Abastecimento"}
+            ]
+        },
+        "relacionamentos": []
+    },
+    "Controle Manutenção de Veiculos": {
+        "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/controle_manutencao_veiculos",
+        "prefixo": "controle_manutencao_veiculos",
+        "frequencia": "mensal",
+        "parametros_obrigatorios": ["codigo_municipio", "data_referencia_doc"],
+        "campos_ui": [],
+        "colunas_texto": {
+            "codigo_municipio": "Codigo do Municipio",
+            "nome_razao_prestador": "Nome Prestador",
+            "nome_responsavel_manutencao": "Nome Responsavel",
+            "numero_empenho": "Numero Empenho"
+        },
+        "layout_card": {
+            "topo_esq": "codigo_renavam",
+            "titulo_grande": "nome_razao_prestador",
+            "meta_1": "codigo_municipio",
+            "meta_2": "data_manutencao",
+            "corpo_texto": ["descricao_servico"],
+            "grid_financeiro": [
+                {"coluna": "valor_total_servico", "label_caixa": "Valor Total do Serviço"}
+            ]
         },
         "relacionamentos": []
     }

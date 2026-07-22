@@ -72,16 +72,25 @@ def buscar_nome_orgao_api(codigo_municipio: str, ano_exercicio: str, codigo_orga
 
 def extrair_informacoes_principais(row):
     infos = {"numero": "Não Informado", "data": "Não Informada", "valor": 0.0, "fornecedor": "Não Informado", "doc_fornecedor": "Ocultado"}
-    
-    for k in ['numero_nota_fiscal', 'numero_empenho', 'numero_nota_pagamento', 'numero_contrato', 'numero_tombamento', 'numero_documento_despesa_extra']:
+
+    #Numero de documentos
+    for k in ['numero_nota_fiscal', 'numero_empenho', 'numero_nota_pagamento', 'numero_contrato', 'numero_tombamento', 'numero_documento_despesa_extra', 'codigo_renavam']:
         if k in row and not pd.isna(row[k]): infos["numero"] = str(row[k]).replace('.0', ''); break
-    for k in ['data_emissao', 'data_emissao_empenho', 'data_nota_pagamento', 'data_aquisicao', 'data_incorporacao', 'data_emissao_despesa_extra']:
+
+    #Datas
+    for k in ['data_emissao', 'data_emissao_empenho', 'data_nota_pagamento', 'data_aquisicao', 'data_incorporacao', 'data_emissao_despesa_extra', 'data_inclusao_uo']:
         if k in row and not pd.isna(row[k]): infos["data"] = row[k]; break
-    for k in ['valor_liquido', 'valor_bruto', 'valor_empenhado', 'valor_nota_pagamento', 'valor_aquisicao', 'valor_total_item', 'valor_documento_despesa_extra', 'valor_liquidado']:
+
+    #Valores
+    for k in ['valor_liquido', 'valor_bruto', 'valor_empenhado', 'valor_nota_pagamento', 'valor_aquisicao', 'valor_total_item', 'valor_documento_despesa_extra', 'valor_liquidado', 'valor_total_abastecimento', 'valor_total_servico', 'nome_responsavel_manutencao']:
         if k in row and not pd.isna(row[k]): infos["valor"] = float(row[k]); break
-    for k in ['nome_negociante', 'nome_responsavel_pagamento', 'nome_credor', 'nome_proprietario', 'nome_credor_despesa_extra']:
+
+    #Nomes
+    for k in ['nome_negociante', 'nome_responsavel_pagamento', 'nome_credor', 'nome_proprietario', 'nome_credor_despesa_extra', 'nome_fornecedor', 'nome_razao_prestador']:
         if k in row and not pd.isna(row[k]) and str(row[k]).strip(): infos["fornecedor"] = str(row[k]); break
-    for k in ['numero_documento_negociante', 'cpf_responsavel_pagamento', 'cpf_cnpj_emitente']:
+
+    #Informações numericas extras
+    for k in ['numero_documento_negociante', 'cpf_responsavel_pagamento', 'cpf_cnpj_emitente', 'dados_documento_fornecedor']:
         if k in row and not pd.isna(row[k]) and str(row[k]).strip(): infos["doc_fornecedor"] = str(row[k]); break
             
     return infos
@@ -137,11 +146,18 @@ def exibir_modal_detalhes(row, categoria, ano, codigo_mun, config_atual=None, id
     # 📜 DESCRIÇÃO DINÂMICA (Traduzida)
     # ==============================================================================
     desc_key = layout.get("corpo_texto", "")
-    if desc_key and desc_key in row and not pd.isna(row[desc_key]):
-        # Busca o nome bonito no dicionário. Se não achar, formata a string crua.
+    if isinstance(desc_key, list):
+        # Múltiplas colunas (Ex: Frota)
+        partes_modal = [str(row.get(c, "")).strip() for c in desc_key if c in row and not pd.isna(row[c]) and str(row[c]).strip()]
+        if partes_modal:
+            st.markdown(f"#### 📜 Especificações / Detalhes")
+            st.info(" — ".join(partes_modal))
+            st.divider()
+            
+    elif desc_key and desc_key in row and not pd.isna(row[desc_key]):
+        # Coluna única (Ex: Empenho)
         label_desc = dicionario_nomes.get(desc_key, desc_key).replace('_', ' ').title()
-        
-        st.markdown(f"#### 📜 {label_desc}") # Agora imprime, por exemplo: "Histórico Do Empenho"
+        st.markdown(f"#### 📜 {label_desc}") 
         st.info(row[desc_key])
         st.divider()
 
