@@ -443,15 +443,13 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
 
     # ------------------------------------------------------------------------
     # JOIN 2: Despesa Extra Orçamentária (via município + fornecedor + valor)
-    #   - Duas variantes de valor (líquido = doc - dedução; e bruto = doc puro)
-    #     pois nem sempre fica claro qual das duas é a que "bate" com a NF.
     # ------------------------------------------------------------------------
     join_despesa_extra = ""
     if tem_despesa_extra:
         join_despesa_extra = """
             LEFT JOIN (
                 SELECT codigo_municipio, nome_normalizado, valor_rounded_liquido AS valor_rounded,
-                       'Pago' AS flag_extra, MAX(data_emissao_despesa_extra) AS ultima_data_extra
+                       'Pago' AS flag_extra, MIN(data_emissao_despesa_extra) AS primeira_data_extra
                 FROM tabela_despesa_extra
                 GROUP BY 1, 2, 3
             ) AS extra_liq
@@ -462,7 +460,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
 
             LEFT JOIN (
                 SELECT codigo_municipio, nome_normalizado, valor_rounded_bruto AS valor_rounded,
-                       'Pago' AS flag_extra, MAX(data_emissao_despesa_extra) AS ultima_data_extra
+                       'Pago' AS flag_extra, MIN(data_emissao_despesa_extra) AS primeira_data_extra
                 FROM tabela_despesa_extra
                 GROUP BY 1, 2, 3
             ) AS extra_bruto
@@ -478,7 +476,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     expr_pag_flag = "pag.flag_pagamento" if tem_pagamento_normal else "NULL"
     expr_pag_data = "pag.ultima_data" if tem_pagamento_normal else "NULL"
     expr_extra_flag = "COALESCE(extra_liq.flag_extra, extra_bruto.flag_extra)" if tem_despesa_extra else "NULL"
-    expr_extra_data = "COALESCE(extra_liq.ultima_data_extra, extra_bruto.ultima_data_extra)" if tem_despesa_extra else "NULL"
+    expr_extra_data = "COALESCE(extra_liq.primeira_data_extra, extra_bruto.primeira_data_extra)" if tem_despesa_extra else "NULL"
 
     cols_pagamento = f"""
         CASE 
@@ -493,7 +491,12 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             WHEN {expr_extra_flag} = 'Pago' THEN 'Despesa Extra Orçamentária'
             ELSE NULL
         END AS "Forma de Pagamento",
-        COALESCE({expr_pag_data}, {expr_extra_data}) AS "Data Confirmação Pagto (TCE)"
+        CASE
+            WHEN t.__CHAVE_MESTRA__ IS NULL THEN NULL
+            WHEN {expr_pag_flag} = 'Pago' THEN {expr_pag_data}
+            WHEN {expr_extra_flag} = 'Pago' THEN {expr_extra_data}
+            ELSE NULL
+        END AS "Data Confirmação Pagto (TCE)"
     """
 
     # Monta a lista de colunas para excluir dinamicamente (evita erro caso a coluna _str_linha não exista)
@@ -627,9 +630,8 @@ def render_bloco_fortes():
                     m1.metric("✅ Encontrados (TCE)", f"{qtd_ambos:,}".replace(',', '.'))
                     m2.metric("⚠️ Não Encontrados", f"{qtd_so_fortes:,}".replace(',', '.'))
                     m3.metric("💰 Notas c/ Pagamento", f"{qtd_pagas:,}".replace(',', '.'))
-                    m4.metric("💳 Via Despesa Extra", f"{qtd_pagas_extra:,}".replace(',', '.'))
-                    m5.metric("🏢 Total no Fortes", f"{len(df_relatorio):,}".replace(',', '.'))
-                    m6.metric("🏛️ Sobra no TCE", f"{qtd_so_tce:,}".replace(',', '.'))
+                    m4.metric("🏢 Total no Fortes", f"{len(df_relatorio):,}".replace(',', '.'))
+                    m5.metric("🏛️ Sobra no TCE", f"{qtd_so_tce:,}".replace(',', '.'))
                     
                     st.divider()
                     
