@@ -74,15 +74,15 @@ def extrair_informacoes_principais(row):
     infos = {"numero": "Não Informado", "data": "Não Informada", "valor": 0.0, "fornecedor": "Não Informado", "doc_fornecedor": "Ocultado"}
 
     #Numero de documentos
-    for k in ['numero_nota_fiscal', 'numero_empenho', 'numero_nota_pagamento', 'numero_contrato', 'numero_tombamento', 'numero_documento_despesa_extra', 'codigo_renavam']:
+    for k in ['numero_nota_fiscal', 'numero_empenho', 'numero_nota_pagamento', 'numero_contrato', 'numero_tombamento', 'numero_documento_despesa_extra', 'codigo_renavam', 'numero_registro']:
         if k in row and not pd.isna(row[k]): infos["numero"] = str(row[k]).replace('.0', ''); break
 
     #Datas
-    for k in ['data_emissao', 'data_emissao_empenho', 'data_nota_pagamento', 'data_aquisicao', 'data_incorporacao', 'data_emissao_despesa_extra', 'data_inclusao_uo']:
+    for k in ['data_emissao', 'data_emissao_empenho', 'data_nota_pagamento', 'data_aquisicao', 'data_incorporacao', 'data_emissao_despesa_extra', 'data_inclusao_uo', 'data_aquisicao']:
         if k in row and not pd.isna(row[k]): infos["data"] = row[k]; break
 
     #Valores
-    for k in ['valor_liquido', 'valor_bruto', 'valor_empenhado', 'valor_nota_pagamento', 'valor_aquisicao', 'valor_total_item', 'valor_documento_despesa_extra', 'valor_liquidado', 'valor_total_abastecimento', 'valor_total_servico', 'nome_responsavel_manutencao']:
+    for k in ['valor_liquido', 'valor_bruto', 'valor_empenhado', 'valor_nota_pagamento', 'valor_aquisicao', 'valor_total_item', 'valor_documento_despesa_extra', 'valor_liquidado', 'valor_total_abastecimento', 'valor_total_servico', 'nome_responsavel_manutencao', 'valor_depreciavel']:
         if k in row and not pd.isna(row[k]): infos["valor"] = float(row[k]); break
 
     #Nomes
