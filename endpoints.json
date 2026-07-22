@@ -76,9 +76,11 @@
             "titulo_grande": "cpf_cnpj_emitente",
             "meta_1": "municipio_referencia",
             "meta_2": "data_emissao",
-            "corpo_texto": "numero_chave_acesso_nfe",
+            "corpo_texto": "numero_empenho",
             "grid_financeiro": [
-                {"coluna": "valor_bruto", "label_caixa": "Valor da NF"}
+                {"coluna": "valor_liquido", "label_caixa": "Valor Liquido NF"},
+                {"coluna": "valor_aliquota_iss", "label_caixa": "Aliquota ISS"},
+                {"coluna": "valor_bruto", "label_caixa": "Valor Bruto NF"}
             ]
         },
         "relacionamentos": [

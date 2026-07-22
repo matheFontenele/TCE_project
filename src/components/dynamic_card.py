@@ -110,6 +110,7 @@ def renderizar_card_dinamico(row, index, categoria, config_atual, filtro_geral, 
 
     r = row.to_dict() if isinstance(row, pd.Series) else row
     layout = config_atual.get("layout_card", {})
+    dicionario_nomes = config_atual.get("colunas_texto", {}) # Puxa o tradutor do JSON
 
     # 1. CAPTURA RÍGIDA DOS SLOTS MAPEADOS NO JSON
     col_topo   = layout.get("topo_esq", "")
@@ -124,8 +125,10 @@ def renderizar_card_dinamico(row, index, categoria, config_atual, filtro_geral, 
     val_meta2  = _formatar_data(r.get(col_meta2))
     val_corpo  = str(r.get(col_corpo, "Sem descrição.")).strip()
 
-    dicionario_nomes = config_atual.get("colunas_texto", {})
-    label_topo = dicionario_nomes.get(col_topo, col_topo).replace("_", " ").title()
+    # --- CRIAÇÃO DOS LABELS USANDO O DICIONÁRIO DO JSON ---
+    label_topo   = dicionario_nomes.get(col_topo, col_topo).replace("_", " ").title()
+    label_titulo = dicionario_nomes.get(col_titulo, col_titulo).replace("_", " ").title()
+    label_corpo  = dicionario_nomes.get(col_corpo, col_corpo).replace("_", " ").title()
 
     slot_id_montado = f"{label_topo.upper()}: {val_topo}"
 
@@ -134,12 +137,12 @@ def renderizar_card_dinamico(row, index, categoria, config_atual, filtro_geral, 
     
     badge_status = ""
     status = r.get("status_pagamento")
-    # Garante que o status existe, não é NaN (Not a Number) e não é vazio
+    # Garante que o status existe, não é NaN e não é vazio
     if status and not pd.isna(status) and str(status).strip() != "":
         status_str = str(status).strip().upper()
         badge_status = f'<span class="status-badge status-{status_str.lower()}">{status_str}</span>'
 
-    # Grifador
+    # --- GRIFADOR (HIGHLIGHT) E CORTE DE TEXTO (ELLIPSIS) ---
     if filtro_geral:
         slot_id_montado = _highlight(slot_id_montado, filtro_geral)
         val_titulo      = _highlight(val_titulo, filtro_geral)
@@ -157,31 +160,40 @@ def renderizar_card_dinamico(row, index, categoria, config_atual, filtro_geral, 
         col_alvo = item.get("coluna")
         label_caixa = item.get("label_caixa", "Valor")
 
-        # Se a linha atual do banco não possui esta coluna ou ela está vazia, pula a caixinha
         if col_alvo not in r or pd.isna(r[col_alvo]) or r[col_alvo] == "":
             continue
 
         val_num = r[col_alvo]
         val_str = _formatar_moeda(val_num)
 
-        # Regra de semântica de cores
+        # Semântica de Cores Financeiras
         cor_texto = "color: var(--text-color);"
         if any(w in col_alvo.lower() for w in ['pago', 'pagamento', 'liquido']): cor_texto = "color: #10b981;" # Verde
         elif any(w in col_alvo.lower() for w in ['liquidado']): cor_texto = "color: #3b82f6;"                  # Azul
 
-        # Inteligência: Se a coluna for de 'Quantidade' (Ex: Itens de NF), não coloca "R$" na frente!
+        # Inteligência: Omite "R$" se for quantidade
         prefixo_moeda = "" if any(w in col_alvo.lower() for w in ['quantidade', 'qtd']) else "R$ "
 
         grid_valores_html += f'<div class="value-col"><div class="value-title">{label_caixa}</div><div class="value-num" style="{cor_texto}">{prefixo_moeda}{val_str}</div></div>'
 
-    # 3. MONTAGEM FINAL
+    # ==========================================================================
+    # 3. MONTAGEM FINAL DO HTML DO CARD (AGORA COM OS LABELS)
+    # ==========================================================================
+    # Adicionamos tags <strong> discretas para exibir o nome do campo antes do valor!
+    
     card_box = (
         f'<div class="report-card">'
         f'  <div class="card-header-row"><div class="card-header">{slot_id_montado} {badge_status}</div>{badge_match}</div>'
-        f'  <div class="card-vendor">{val_titulo}</div>'
+        
+        # O Título agora exibe de onde veio! (Ex: "Credor: João da Silva")
+        f'  <div class="card-vendor"><span style="font-size: 0.75rem; color: var(--faded-text-color, #64748b); text-transform: uppercase;">{label_titulo}</span><br>{val_titulo}</div>'
+        
         f'  <div class="card-org">📍 {val_meta1}</div>'
         f'  <span class="card-date">📅 {val_meta2}</span>'
-        f'  <div class="card-detail-txt">{detalhe_view}</div>'
+        
+        # O Corpo agora exibe o rótulo! (Ex: "Histórico:")
+        f'  <div class="card-detail-txt"><strong>{label_corpo}:</strong> {detalhe_view}</div>'
+        
         f'  <div class="values-grid">{grid_valores_html}</div>'
         f'</div>'
     )
