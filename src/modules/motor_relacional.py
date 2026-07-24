@@ -11,9 +11,6 @@ def normalizar_chave(valor):
     return v
 
 def obter_dados_relacionados(regra, row, arquivos_alvo_validos):
-    """
-    Engine puro de dados. Retorna um dicionário com o resultado para a UI renderizar.
-    """
     if not arquivos_alvo_validos:
         return {"sucesso": False, "msg": "Bases não baixadas."}
 

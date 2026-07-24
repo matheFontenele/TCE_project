@@ -37,6 +37,11 @@ def converter_df_para_xlsx_estilizado(df):
     # Identifica quem é a Nota original (False) e quem são os pagamentos fracionados da mesma nota (True)
     is_subrow = df_export.duplicated(subset=['_chave_agrupamento'], keep='first')
     
+    val_nota_padrao = padronizar_valor(df_export['Valor Total'])
+    val_pago_padrao = padronizar_valor(df_export['Valor Pago (TCE)'])
+    
+    is_yellow = is_subrow & (val_nota_padrao == val_pago_padrao)
+    
     # Converte tudo para string para podermos apagar os textos repetidos sem dar erro
     df_export = df_export.astype(str).replace('nan', '').replace('None', '')
     
@@ -53,11 +58,20 @@ def converter_df_para_xlsx_estilizado(df):
     df_export = df_export.drop(columns=['_chave_agrupamento'], errors='ignore')
     
     def pintar_linha_excel(row):
-        # O row.name é o índice numérico (0, 1, 2...)
-        if is_subrow.iloc[row.name]:
-            return ['background-color: #f8f9fa; color: #6c757d'] * len(row) # Cinza claro para os pagamentos filhos
-        if row.get('Status TCE') == 'Encontrado':
-            return ['background-color: #c6efce; color: #006100'] * len(row) # Verde para a Nota original
+        idx = row.name # Pega o índice real da linha para checar nossas máscaras
+        
+        # 1. Pagamento que bateu com a Nota: Amarelo Destaque
+        if is_yellow.iloc[idx]:
+            return ['background-color: #ffff00; color: #000000; font-weight: bold;'] * len(row)
+        
+        # 2. Outros Pagamentos Fracionados: Fundo branco/normal e texto Cinza
+        if is_subrow.iloc[idx]:
+            return ['color: #6c757d'] * len(row) 
+            
+        # 3. Nota Original Encontrada: Fundo Verde
+        if df['Status TCE'].iloc[idx] == 'Encontrado':
+            return ['background-color: #c6efce; color: #006100'] * len(row)
+            
         return [''] * len(row)
         
     df_styled = df_export.style.apply(pintar_linha_excel, axis=1)
