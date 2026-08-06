@@ -7,6 +7,7 @@ services:
       - STREAMLIT_SERVER_FILE_WATCHER_TYPE=poll
       - STREAMLIT_SERVER_RUN_ON_SAVE=true
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - TZ=America/Fortaleza
     volumes:
       - .:/app
       - /app/__pycache__
@@ -17,9 +18,25 @@ services:
     command: streamlit run src/app.py --server.port=8501 --server.address=0.0.0.0
     restart: unless-stopped
 
+  # SERVIÇO NOVO: O Robô Agendador Mensal
+  robo_agendador:
+    build: .
+    container_name: tce_robo
+    environment:
+      - TZ=America/Fortaleza
+    volumes:
+      - .:/app
+      - /app/__pycache__
+      - /app/venv
+      - /app/.git
+    command: python src/worker_extrator.py
+    restart: unless-stopped
+
   extrator:
     build: .
     container_name: tce_extrator
+    environment:
+      - TZ=America/Fortaleza
     volumes:
       - .:/app
       - /app/__pycache__
@@ -33,6 +50,8 @@ services:
     profiles: ["tools"]          # 🛡️ O ESCUDO: O comando 'up' ignora este serviço!
     stdin_open: true             # Equivalente ao -i (Mantém o canal de texto aberto)
     tty: true                    # Equivalente ao -t (Engana o Python dizendo que há um monitor)
+    environment:
+      - TZ=America/Fortaleza
     volumes:
       - .:/app
       - /app/__pycache__

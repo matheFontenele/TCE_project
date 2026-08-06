@@ -1,4 +1,5 @@
-exercicio_orcamento= anos (202500)
-data_referencia_doc= meses (202501)
-
+https://municipios-transparencia.tce.ce.gov.br/index.php/main/municipios
+https://municipios-transparencia.tce.ce.gov.br/index.php/municipios/show
+https://municipios-transparencia.tce.ce.gov.br/index.php/municipios/despesas/mun/049/versao/2026
+https://municipios-transparencia.tce.ce.gov.br/index.php/municipios/nempenho/cod_neg/03420933000126/mun/049/versao/2023/despesa/33903900/cod_dig/39/de_elemento_od/Outros+Servi%E7os+de+Terceiros+-+Pessoa+Jur%EDdica
 
