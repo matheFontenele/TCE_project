@@ -37,11 +37,23 @@ def converter_df_para_xlsx_estilizado(df):
     # Identifica quem é a Nota original (False) e quem são os pagamentos fracionados da mesma nota (True)
     is_subrow = df_export.duplicated(subset=['_chave_agrupamento'], keep='first')
     
+    # Validação do Amarelo (Valor bate exatamente)
     val_nota_padrao = padronizar_valor(df_export['Valor Total'])
     val_pago_padrao = padronizar_valor(df_export['Valor Pago (TCE)'])
-    
     is_yellow = is_subrow & (val_nota_padrao == val_pago_padrao)
     
+    # =========================================================================
+    # 🔴 NOVA REGRA: MÁSCARA DE DIVERGÊNCIA DE DATA
+    # =========================================================================
+    if 'Última Data de Recebimento' in df_export.columns and 'Data Confirmação Pagto (TCE)' in df_export.columns:
+        data_fortes = padronizar_data(df_export['Última Data de Recebimento'])
+        data_tce = padronizar_data(df_export['Data Confirmação Pagto (TCE)'])
+        
+        # Só acusa divergência se for sub-linha, se forem diferentes, e se ambas existirem
+        is_date_divergent = is_subrow & (data_fortes != data_tce) & (data_tce != 'SEM_DATA') & (data_fortes != 'SEM_DATA')
+    else:
+        is_date_divergent = pd.Series([False] * len(df_export), index=df_export.index)
+
     # Converte tudo para string para podermos apagar os textos repetidos sem dar erro
     df_export = df_export.astype(str).replace('nan', '').replace('None', '')
     
@@ -54,25 +66,34 @@ def converter_df_para_xlsx_estilizado(df):
     # Coloca uma seta visual nos sub-pagamentos
     df_export.loc[is_subrow, 'Forma de Pagamento'] = "  ↳ " + df_export.loc[is_subrow, 'Forma de Pagamento']
     
-    # Apaga a coluna técnica de agrupamento
+    # Apaga a coluna técnica de agrupamento ANTES de pegarmos os índices
     df_export = df_export.drop(columns=['_chave_agrupamento'], errors='ignore')
     
+    # Pega a posição (index) exata da coluna de Data para pintarmos apenas ela
+    try:
+        idx_col_data = df_export.columns.get_loc('Data Confirmação Pagto (TCE)')
+    except KeyError:
+        idx_col_data = -1
+    
     def pintar_linha_excel(row):
-        idx = row.name # Pega o índice real da linha para checar nossas máscaras
+        idx = row.name # Índice real numérico da linha atual
+        estilos = [''] * len(row) # Inicia a linha totalmente sem cor
         
-        # 1. Pagamento que bateu com a Nota: Amarelo Destaque
+        # 1. BACKGROUND BASE (Pinta a linha inteira)
         if is_yellow.iloc[idx]:
-            return ['background-color: #ffff00; color: #000000; font-weight: bold;'] * len(row)
-        
-        # 2. Outros Pagamentos Fracionados: Fundo branco/normal e texto Cinza
-        if is_subrow.iloc[idx]:
-            return ['color: #6c757d'] * len(row) 
+            estilos = ['background-color: #ffff00; color: #000000; font-weight: bold;'] * len(row)
+        elif is_subrow.iloc[idx]:
+            estilos = ['color: #6c757d'] * len(row) # Texto cinza para filhos normais
+        elif df['Status TCE'].iloc[idx] == 'Encontrado':
+            estilos = ['background-color: #c6efce; color: #006100'] * len(row)
             
-        # 3. Nota Original Encontrada: Fundo Verde
-        if df['Status TCE'].iloc[idx] == 'Encontrado':
-            return ['background-color: #c6efce; color: #006100'] * len(row)
+        # 2. SOBRESCREVE A COR APENAS DA DATA (Se houver divergência)
+        if is_date_divergent.iloc[idx] and idx_col_data != -1:
+            # Preserva a cor de fundo (ex: amarelo), mas injeta a fonte vermelha em negrito
+            bg_atual = estilos[idx_col_data].split('color:')[0] 
+            estilos[idx_col_data] = bg_atual + 'color: #ff0000; font-weight: bold;'
             
-        return [''] * len(row)
+        return estilos
         
     df_styled = df_export.style.apply(pintar_linha_excel, axis=1)
     
@@ -82,7 +103,7 @@ def converter_df_para_xlsx_estilizado(df):
         
         # Habilita o Agrupamento (Collapse) nativo do Excel
         for i, sub in enumerate(is_subrow):
-            row_idx = i + 2 # +1 do cabeçalho, +1 porque o Excel não começa no 0
+            row_idx = i + 2 # +1 do cabeçalho, +1 porque o Excel começa no 1 (logo linha 2)
             if sub:
                 worksheet.row_dimensions[row_idx].outline_level = 1
                 worksheet.row_dimensions[row_idx].hidden = True # A planilha já vai abrir colapsada!
