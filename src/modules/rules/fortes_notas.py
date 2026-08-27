@@ -141,6 +141,55 @@ def padronizar_valor(serie):
             return "0.00"
     return serie.apply(limpar_moeda)
 
+def priorizar_pagamento_unico(df_pagamentos, df_nota_fiscal):
+    """
+    Quando há múltiplos pagamentos para o mesmo empenho, aplica regras de priorização
+    para encontrar o pagamento mais provável vinculado à nota fiscal.
+    """
+    if df_pagamentos.empty:
+        return df_pagamentos
+    
+    # Estratégia 1: Se há apenas 1 pagamento, retorna ele
+    if len(df_pagamentos) == 1:
+        return df_pagamentos
+    
+    # Estratégia 2: Busca por correspondência de valor
+    valor_nf = df_nota_fiscal.get('valor_liquido', 0)
+    try:
+        valor_nf_float = float(valor_nf) if valor_nf and valor_nf != '0' else 0
+    except:
+        valor_nf_float = 0
+    
+    if valor_nf_float > 0:
+        # Calcula diferença absoluta entre valor do pagamento e valor da NF
+        df_pagamentos = df_pagamentos.copy()
+        df_pagamentos['_diff_valor'] = abs(
+            pd.to_numeric(df_pagamentos.get('valor_pagamento', 0), errors='coerce').fillna(0) - valor_nf_float
+        )
+        # Ordena pela menor diferença (pagamento mais próximo do valor da NF)
+        df_pagamentos = df_pagamentos.sort_values('_diff_valor')
+    
+    # Estratégia 3: Prioriza "Nota de Pagamento" sobre outros tipos
+    if 'tipo_pagamento' in df_pagamentos.columns:
+        df_pagamentos['_prioridade_tipo'] = df_pagamentos['tipo_pagamento'].apply(
+            lambda x: 1 if x == 'Nota de Pagamento' else 2
+        )
+        df_pagamentos = df_pagamentos.sort_values('_prioridade_tipo')
+    
+    # Remove colunas auxiliares
+    cols_aux = [c for c in df_pagamentos.columns if c.startswith('_')]
+    df_pagamentos = df_pagamentos.drop(columns=cols_aux, errors='ignore')
+    
+    # Retorna apenas o primeiro (mais relevante)
+    return df_pagamentos.head(1)
+
+def escolher_coluna_valor(schema, preferidas):
+    """Prioriza nomes canônicos (iguais ao JSON do modal) antes de chutar a primeira coluna 'valor'."""
+    for nome in preferidas:
+        if nome in schema:
+            return nome
+    cand = [c for c in schema if 'valor' in c.lower()]
+    return cand[0] if cand else None
 # ==========================================
 # 🔗 NORMALIZAÇÃO DE NOME DE FORNECEDOR (para casar Nota Fiscal <-> Despesa Extra)
 # ==========================================
@@ -150,12 +199,6 @@ SUFIXOS_EMPRESARIAIS = [
 ]
 
 def normalizar_nome_credor(nome):
-    """
-    Padroniza o nome do fornecedor/credor para permitir o cruzamento entre
-    'nome_negociante' (notas_empenho) e 'nome_credor_despesa_extra'
-    (despesas_extra_orcamentarias), que costumam vir grafados de forma
-    quase idêntica, mas não 100% iguais (espaços, sufixo societário, etc.).
-    """
     if pd.isna(nome):
         return ""
     txt = str(nome).upper().strip()
@@ -175,7 +218,8 @@ def carregar_parquets_em_cache(caminhos_parquets):
     if not caminhos_parquets:
         return pd.DataFrame()
     
-    colunas_alvo = ['numero_nota_fiscal', 'data_emissao', 'valor_liquido', 'codigo_municipio', 'numero_empenho', 'exercicio_orcamento']
+    # 🎯 ADICIONADO: data_liquidacao no array alvo
+    colunas_alvo = ['numero_nota_fiscal', 'data_emissao', 'valor_liquido', 'codigo_municipio', 'numero_empenho', 'exercicio_orcamento', 'data_liquidacao']
     dfs = []
     
     for c in caminhos_parquets:
@@ -196,15 +240,10 @@ def carregar_parquets_em_cache(caminhos_parquets):
 
 @st.cache_data(show_spinner="Carregando ponte de fornecedores (Notas de Empenho)...")
 def carregar_mapa_negociantes(codigo_mun_busca):
-    """
-    Constrói { (codigo_municipio, exercicio_orcamento, numero_empenho): nome_negociante_normalizado }
-    Serve de PONTE segura ligando o Fornecedor ao Empenho e ao Ano correto.
-    """
     caminhos = glob.glob(os.path.join(PASTA_TCE, f"notas_empenho_*_{codigo_mun_busca}.parquet"))
     if not caminhos:
         return {}
 
-    # ADICIONADO: 'exercicio_orcamento' como alvo obrigatório
     colunas_alvo = ['codigo_municipio', 'exercicio_orcamento', 'numero_empenho', 'nome_negociante']
     dfs = []
     for c in caminhos:
@@ -225,10 +264,8 @@ def carregar_mapa_negociantes(codigo_mun_busca):
     df['numero_empenho'] = df['numero_empenho'].astype(str).str.strip()
     df['nome_normalizado'] = df['nome_negociante'].apply(normalizar_nome_credor)
     
-    # Remove as duplicatas usando a tripla combinação perfeita
     df = df.drop_duplicates(subset=['codigo_municipio', 'exercicio_orcamento', 'numero_empenho'])
 
-    # Retorna uma TUPLA DE 3 ITENS (Mun, Ano, Empenho) 
     return {
         (row['codigo_municipio'], row['exercicio_orcamento'], row['numero_empenho']): row['nome_normalizado']
         for _, row in df.iterrows()
@@ -236,13 +273,6 @@ def carregar_mapa_negociantes(codigo_mun_busca):
 
 @st.cache_data(show_spinner="Carregando Despesas Extra Orçamentárias...")
 def carregar_despesas_extra_cache(codigo_mun_busca):
-    """
-    Carrega TODOS os arquivos de despesas_extra_orcamentarias do município
-    (ignorando o ano, igual ao Radar Histórico de pagamentos), normaliza o
-    nome do credor e calcula o valor líquido (documento - dedução) e o valor
-    bruto (documento), para permitir casar com o valor_liquido da Nota Fiscal
-    de qualquer um dos dois jeitos.
-    """
     caminhos = glob.glob(os.path.join(PASTA_TCE, f"despesas_extra_orcamentarias_*_{codigo_mun_busca}.parquet"))
     if not caminhos:
         return pd.DataFrame()
@@ -267,7 +297,6 @@ def carregar_despesas_extra_cache(codigo_mun_busca):
 
     df = pd.concat(dfs, ignore_index=True)
 
-    # Ignora lançamentos estornados/cancelados (não representam pagamento de fato)
     if 'status_estorno_despesa_extra' in df.columns:
         df = df[~df['status_estorno_despesa_extra'].fillna(0).astype(str).isin(['1', 'True', 'true'])]
 
@@ -283,6 +312,37 @@ def carregar_despesas_extra_cache(codigo_mun_busca):
         df['data_emissao_despesa_extra'], errors='coerce'
     ).dt.strftime('%Y-%m-%d').fillna('')
 
+    return df
+
+@st.cache_data(show_spinner="Carregando Liquidações (Nova Chave Exata)...")
+def carregar_liquidacoes_cache(codigo_mun_busca):
+    caminhos = glob.glob(os.path.join(PASTA_TCE, f"liquidacoes_*_{codigo_mun_busca}.parquet"))
+    if not caminhos:
+        return pd.DataFrame()
+        
+    colunas_alvo = ['codigo_municipio', 'numero_empenho', 'data_liquidacao', 
+                     'valor_liquidado', 'numero_sub_empenho_liquidacao', 'status_estornado']
+    dfs = []
+    for c in caminhos:
+        try:
+            schema = pq.read_schema(c).names
+            cols_disp = [col for col in colunas_alvo if col in schema]
+            if 'numero_empenho' in cols_disp and 'numero_sub_empenho_liquidacao' in cols_disp:
+                dfs.append(pd.read_parquet(c, columns=cols_disp))
+        except Exception:
+            continue
+            
+    if not dfs:
+        return pd.DataFrame()
+        
+    df = pd.concat(dfs, ignore_index=True)
+    if 'status_estornado' in df.columns:
+        df = df[~df['status_estornado'].fillna(False).astype(str).isin(['1', 'True', 'true'])]
+        
+    df['codigo_municipio'] = df['codigo_municipio'].astype(str).str.strip().str.zfill(3)
+    df['numero_empenho'] = df['numero_empenho'].astype(str).str.strip()
+    df['_val_liq_limpo'] = padronizar_valor(df['valor_liquidado'])
+    df['_data_liq_limpa'] = padronizar_data(df['data_liquidacao'])
     return df
 
 def carregar_relatorio_fortes(arquivo_upload):
@@ -353,7 +413,6 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             df_t['exercicio_orcamento'] = '2000'
             
     # --- 3. PADRONIZAÇÃO BLINDADA (PYTHON) ANTES DO DUCKDB ---
-    # É aqui que corrigimos o BUG do Match! O Python limpa os zeros à esquerda e arruma os decimais.
     df_f['_nota_limpa'] = padronizar_documento(df_f[nf_f])
     df_f['_val_limpo'] = padronizar_valor(df_f[valor_f])
     
@@ -402,7 +461,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         WHERE _nota_limpa != '0'
     """)
 
-    # ---------------------------------------------------------
+        # ---------------------------------------------------------
     # VIEW 2: TCE (Notas Fiscais + Nome do Fornecedor)
     # ---------------------------------------------------------
     con.execute("""
@@ -410,8 +469,10 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         SELECT T.*,
             LPAD(CAST(T.codigo_municipio AS VARCHAR), 3, '0') AS mun_limpo,
             
-            -- Chaves de Ligação já usando as colunas tratadas no Pandas:
+            -- Chave de Ligação da Nota Fiscal
             (T._nota_limpa || '_' || T._val_limpo || '_' || LPAD(CAST(T.codigo_municipio AS VARCHAR), 3, '0')) AS CHAVE_NF,
+            
+            -- ⚠️ CHAVE ÚNICA de busca de pagamento (município + empenho)
             (LPAD(CAST(T.codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(T.numero_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
             
             COALESCE(P.nome_limpo, '') AS nome_fornecedor
@@ -426,14 +487,14 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     """)
 
     # ---------------------------------------------------------
-    # VIEW 3: PAGAMENTOS UNIFICADOS (COM FAREJADOR DE COLUNAS)
+    # VIEW 3: PAGAMENTOS UNIFICADOS (⚠️ TODOS os SELECTs com 4 colunas)
     # ---------------------------------------------------------
     caminhos_pag = glob.glob(os.path.join(PASTA_TCE, f"notas_pagamentos_*_{codigo_mun_busca}.parquet"))
     caminhos_chq = glob.glob(os.path.join(PASTA_TCE, f"cheques_notas_pagamentos_*_{codigo_mun_busca}.parquet"))
     caminhos_fol = glob.glob(os.path.join(PASTA_TCE, f"notas_pagamentos_folhas_*_{codigo_mun_busca}.parquet"))
-    
+
     uniao_blocos = []
-    
+
     # 1. NOTAS DE PAGAMENTO
     arq_pag = []
     col_val_pag = 'NULL'
@@ -443,18 +504,20 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             if 'numero_empenho' in schema:
                 arq_pag.append(f"'{p}'")
                 if col_val_pag == 'NULL':
-                    cand = [c for c in schema if 'valor' in c.lower()]
-                    col_val_pag = cand[0] if cand else "''"
+                    col_val_pag = escolher_coluna_valor(
+                        schema, ['valor_nota_pagamento', 'valor_pago', 'valor_bruto', 'valor_liquido']
+                    ) or "''"
 
     if arq_pag:
         str_val_pag = f"CAST({col_val_pag} AS VARCHAR)" if col_val_pag != "''" else "''"
         uniao_blocos.append(f"""
-            SELECT 
+            SELECT
                 (LPAD(CAST(codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(numero_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
                 CAST(data_nota_pagamento AS VARCHAR) AS data_pagamento,
                 'Nota de Pagamento' AS tipo_pagamento,
                 {str_val_pag} AS valor_pagamento
-            FROM read_parquet([{','.join(arq_pag)}], union_by_name=True) WHERE numero_empenho IS NOT NULL
+            FROM read_parquet([{','.join(arq_pag)}], union_by_name=True)
+            WHERE numero_empenho IS NOT NULL
         """)
 
     # 2. CHEQUES
@@ -466,18 +529,20 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             if 'numero_nota_empenho' in schema:
                 arq_chq.append(f"'{p}'")
                 if col_val_chq == 'NULL':
-                    cand = [c for c in schema if 'valor' in c.lower()]
-                    col_val_chq = cand[0] if cand else "''"
+                    col_val_chq = escolher_coluna_valor(
+                        schema, ['valor_cheque', 'valor_pago', 'valor_bruto']
+                    ) or "''"
 
     if arq_chq:
         str_val_chq = f"CAST({col_val_chq} AS VARCHAR)" if col_val_chq != "''" else "''"
         uniao_blocos.append(f"""
-            SELECT 
+            SELECT
                 (LPAD(CAST(codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(numero_nota_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
                 CAST(data_emissao_cheque AS VARCHAR) AS data_pagamento,
                 'Cheque' AS tipo_pagamento,
                 {str_val_chq} AS valor_pagamento
-            FROM read_parquet([{','.join(arq_chq)}], union_by_name=True) WHERE numero_nota_empenho IS NOT NULL
+            FROM read_parquet([{','.join(arq_chq)}], union_by_name=True)
+            WHERE numero_nota_empenho IS NOT NULL
         """)
 
     # 3. FOLHAS
@@ -489,25 +554,47 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             if 'numero_nota_empenho' in schema:
                 arq_fol.append(f"'{p}'")
                 if col_val_fol == 'NULL':
-                    cand = [c for c in schema if 'valor' in c.lower()]
-                    col_val_fol = cand[0] if cand else "''"
+                    col_val_fol = escolher_coluna_valor(
+                        schema, ['valor_folha', 'valor_pago', 'valor_bruto']
+                    ) or "''"
 
     if arq_fol:
         str_val_fol = f"CAST({col_val_fol} AS VARCHAR)" if col_val_fol != "''" else "''"
         uniao_blocos.append(f"""
-            SELECT 
+            SELECT
                 (LPAD(CAST(codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(numero_nota_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
                 CAST(data_emissao_folha AS VARCHAR) AS data_pagamento,
                 'Folha de Pagto' AS tipo_pagamento,
                 {str_val_fol} AS valor_pagamento
-            FROM read_parquet([{','.join(arq_fol)}], union_by_name=True) WHERE numero_nota_empenho IS NOT NULL
+            FROM read_parquet([{','.join(arq_fol)}], union_by_name=True)
+            WHERE numero_nota_empenho IS NOT NULL
         """)
 
-    # 4. DESPESA EXTRA
+    # ---------------------------------------------------------
+    # VIEW 3a: PAGAMENTOS "OFICIAIS" (Nota de Pagamento, Cheque, Folha)
+    # ---------------------------------------------------------
+    if uniao_blocos:
+        con.execute("CREATE VIEW view_pagamentos_base AS " + " UNION ALL ".join(uniao_blocos))
+    else:
+        con.execute("""
+            CREATE VIEW view_pagamentos_base AS
+            SELECT '' AS CHAVE_BUSCA_PAGAMENTO,
+                   '' AS data_pagamento,
+                   '' AS tipo_pagamento,
+                   '' AS valor_pagamento
+            WHERE 1=0
+        """)
+
+    # ---------------------------------------------------------
+    #  VIEW 3b: DESPESA EXTRA SÓ ENTRA SE NÃO HOUVER PAGAMENTO OFICIAL
+    # ---------------------------------------------------------
     if not df_extra.empty:
-        uniao_blocos.append("""
-            SELECT 
-                TCE.CHAVE_BUSCA_PAGAMENTO,
+        con.execute("""
+            CREATE VIEW view_pagamentos_unificados AS
+            SELECT * FROM view_pagamentos_base
+            UNION ALL
+            SELECT
+                TCE.CHAVE_BUSCA_PAGAMENTO AS CHAVE_BUSCA_PAGAMENTO,
                 EXTRA.data_emissao_despesa_extra AS data_pagamento,
                 'Despesa Extra Orçamentária' AS tipo_pagamento,
                 CAST(EXTRA.valor_rounded_liquido AS VARCHAR) AS valor_pagamento
@@ -517,14 +604,15 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
              AND EXTRA.nome_normalizado != ''
              AND EXTRA.nome_normalizado = TCE.nome_fornecedor
              AND (EXTRA.valor_rounded_liquido = TCE._val_limpo OR EXTRA.valor_rounded_bruto = TCE._val_limpo)
+            WHERE NOT EXISTS (
+                SELECT 1 FROM view_pagamentos_base B
+                WHERE B.CHAVE_BUSCA_PAGAMENTO = TCE.CHAVE_BUSCA_PAGAMENTO
+            )
         """)
-
-    if uniao_blocos:
-        con.execute("CREATE VIEW view_pagamentos_unificados AS " + " UNION ALL ".join(uniao_blocos))
     else:
-        con.execute("CREATE VIEW view_pagamentos_unificados AS SELECT '' AS CHAVE_BUSCA_PAGAMENTO, '' AS data_pagamento, '' AS tipo_pagamento, '' AS valor_pagamento WHERE 1=0")
+        con.execute("CREATE VIEW view_pagamentos_unificados AS SELECT * FROM view_pagamentos_base")
 
-    # ==============================================================================
+        # ==============================================================================
     # 🎯 A MEGA QUERY DE CRUZAMENTO (EXPANSIVA)
     # ==============================================================================
     cols_excluir = ['_mun_adivinhado', '_nota_limpa', '_val_limpo', 'CHAVE_NF']
@@ -534,7 +622,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     query_final = f"""
         SELECT 
             F.* EXCLUDE ({str_exclude}),
-            F.CHAVE_NF AS "_chave_agrupamento", -- Coluna técnica invisível
+            F.CHAVE_NF AS "_chave_agrupamento",
             
             CASE WHEN TCE.CHAVE_NF IS NOT NULL THEN 'Encontrado' ELSE 'Não Encontrado' END AS "Status TCE",
             TCE.numero_empenho AS "Empenho Vinculado",
@@ -554,7 +642,6 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         LEFT JOIN view_tce AS TCE 
             ON F.CHAVE_NF = TCE.CHAVE_NF
             
-        -- JOIN direto sem GROUP BY! Ele expande a nota em várias linhas se houver vários pagamentos
         LEFT JOIN view_pagamentos_unificados AS PAG 
             ON TCE.CHAVE_BUSCA_PAGAMENTO = PAG.CHAVE_BUSCA_PAGAMENTO
             
@@ -568,7 +655,6 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     df_relatorio.columns = [c.replace('FORTES_', '') for c in df_relatorio.columns]
     df_relatorio = df_relatorio.rename(columns={'Documento': 'Nº da Nota Fiscal'})
 
-    # Lista de colunas a serem removidas no relatorio final
     colunas_para_remover = [
         'Valor do Serviço Selecionado', 'Valor do Produto Selecionado', 'Valor dos Vencimentos de Cheque',
         'Valor dos Vencimentos de Cartão', 'Valor da Baixa dos Vencimentos  de Cheque', 'Valor Cancelado',
@@ -581,8 +667,63 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     ]
     
     df_relatorio = df_relatorio.drop(columns=[col for col in colunas_para_remover if col in df_relatorio.columns])
+
+    # ==============================================================================
+    # 🔥 FUNIL DE PAGAMENTOS — deixa EXATAMENTE o pagamento certo (lógica do modal)
+    # ==============================================================================
+    PRIORIDADE_FONTE = {
+        'Nota de Pagamento': 1,
+        'Cheque': 2,
+        'Folha de Pagto': 3,
+        'Despesa Extra Orçamentária': 4,
+    }
+
+    df_relatorio['_prio_fonte'] = df_relatorio['Forma de Pagamento'].map(PRIORIDADE_FONTE).fillna(99)
+    df_relatorio['_val_pago_cmp'] = padronizar_valor(df_relatorio['Valor Pago (TCE)'])
+    df_relatorio['_val_nota_cmp'] = padronizar_valor(df_relatorio['Valor Total'])
+
+    blocos = []
+    for _, grp in df_relatorio.groupby('_chave_agrupamento', sort=False):
+        pagos = grp[
+            grp['Forma de Pagamento'].notna()
+            & (grp['Forma de Pagamento'].astype(str).str.strip() != '')
+        ]
+
+        if pagos.empty:
+            blocos.append(grp)  # nota sem pagamento
+            continue
+
+        # ETAPA 1: existe Nota de Pagamento? Descarta cheque/folha/despesa extra
+        prio_min = pagos['_prio_fonte'].min()
+        pagos = pagos[pagos['_prio_fonte'] == prio_min]
+
+        # ETAPA 2: algum pagamento fecha com o valor da nota? Descarta os outros
+        exatos = pagos[pagos['_val_pago_cmp'] == pagos['_val_nota_cmp']]
+        if not exatos.empty:
+            pagos = exatos
+
+        # ETAPA 3: dedupe de duplicados exatos
+        pagos = pagos.drop_duplicates(
+            subset=['Forma de Pagamento', 'Data Confirmação Pagto (TCE)', '_val_pago_cmp']
+        )
+
+        blocos.append(pagos.sort_values('Data Confirmação Pagto (TCE)'))
+
+    df_relatorio = (
+        pd.concat(blocos)
+        .sort_values(['_chave_agrupamento', 'Data Confirmação Pagto (TCE)'])
+        .reset_index(drop=True)
+    )
+    df_relatorio = df_relatorio.drop(columns=['_prio_fonte', '_val_pago_cmp', '_val_nota_cmp'])
+
+    # Bônus visual: data sem o "T00:00:00"
+    if 'Data Confirmação Pagto (TCE)' in df_relatorio.columns:
+        df_relatorio['Data Confirmação Pagto (TCE)'] = (
+            pd.to_datetime(df_relatorio['Data Confirmação Pagto (TCE)'], errors='coerce')
+            .dt.strftime('%d/%m/%Y')
+            .fillna('')
+        )
     
-    # Métricas usando NUNIQUE (para não contar as sub-linhas expandidas duas vezes)
     qtd_ambos = df_relatorio[df_relatorio['Status TCE'] == 'Encontrado']['_chave_agrupamento'].nunique()
     qtd_so_fortes = df_relatorio[df_relatorio['Status TCE'] == 'Não Encontrado']['_chave_agrupamento'].nunique()
     qtd_pagas = df_relatorio[df_relatorio['Status Pagamento'] == 'Pago']['_chave_agrupamento'].nunique()
@@ -594,10 +735,8 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     df_debug_f = con.execute("SELECT CHAVE_NF FROM view_fortes LIMIT 300").df()
     df_debug_t = con.execute("SELECT CHAVE_NF FROM view_tce LIMIT 300").df()
     
-    # O tamanho base do Fortes para a métrica de tela também passa a ser nunique
     total_fortes = df_relatorio['_chave_agrupamento'].nunique()
     
-    # Substituímos a variável df_relatorio pela tuple total_fortes que enviaremos para a tela
     return df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, qtd_pagas, qtd_pagas_extra, total_fortes, df_debug_f, df_debug_t
 
 # ==========================================
@@ -695,7 +834,6 @@ def render_bloco_fortes():
                     
                     cols_exibir = [c for c in colunas_previa if c in df_relatorio.columns]
                     
-                    # Exibe a tabela crua e leve (apenas amostra de 100)
                     st.dataframe(
                         df_relatorio[cols_exibir].head(100), 
                         use_container_width=True
