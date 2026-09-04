@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.modules.extraction import render_extraction_page
 from src.modules.consultation import render_consultation_page
 from src.modules.compare import render_aba_comparacao
+from src.modules.validacao import render_validacao_page
 
 st.set_page_config(page_title="Automação TCE-CE", page_icon="🤖", layout="wide")
 
@@ -54,7 +55,7 @@ if 'modo_tela' not in st.session_state:
 
 # Layout de Menu Superior
 st.title("🤖 Painel de Automação TCE-CE")
-col_nav1, col_nav2, col_nav3, col_spacer = st.columns([1.0, 1.0, 1.5, 5])
+col_nav1, col_nav2, col_nav3, col_nav4, col_spacer = st.columns([1.0, 1.0, 1.5, 1.2, 4])
 
 with col_nav1:
     if st.button("📊 Extração", key="btn_ext", 
@@ -73,7 +74,12 @@ with col_nav3:
                  type="primary" if st.session_state.modo_tela == 'Comparação' else "secondary"):
         st.session_state.modo_tela = 'Comparação'
         st.rerun()
-        
+
+with col_nav4:
+    if st.button("✅ Validação", key="btn_val",
+                 type="primary" if st.session_state.modo_tela == 'Validação' else "secondary"):
+        st.session_state.modo_tela = 'Validação'
+        st.rerun()
 
 st.divider()
 
@@ -84,3 +90,5 @@ elif st.session_state.modo_tela == 'Consulta':
     render_consultation_page()
 elif st.session_state.modo_tela == 'Comparação':
     render_aba_comparacao()
+elif st.session_state.modo_tela == 'Validação':
+    render_validacao_page()
