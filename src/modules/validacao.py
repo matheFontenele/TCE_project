@@ -1,6 +1,5 @@
 """
-Aba de Validação — valida arquivos posicionais do TCE-CE localmente,
-antes do envio, evitando o ciclo de envio -> rejeição -> correção -> reenvio.
+Aba de Validação — valida arquivos TCE-CE localmente usando motor Polars.
 """
 from io import BytesIO
 
@@ -8,16 +7,11 @@ import pandas as pd
 import streamlit as st
 
 from src.schemas.veiculos import CATALOGO_SCHEMAS
-from src.validators.posicional import validar_arquivo as validar_arquivo_posicional
-from src.validators.delimitado import validar_arquivo as validar_arquivo_delimitado
+from src.validators.motor_polars import validar_arquivo
 
 
 def render_validacao_page():
     st.header("✅ Validação de Arquivos TCE-CE")
-    st.caption(
-        "Valide seus arquivos posicionais localmente antes de enviar ao TCE-CE, "
-        "evitando o ciclo de envio → rejeição → correção → reenvio."
-    )
 
     tipo_selecionado = st.selectbox(
         "Tipo de documento",
@@ -29,7 +23,7 @@ def render_validacao_page():
     st.info(f"📄 Padrão de arquivo esperado: `{config['arquivo_pattern']}`")
 
     arquivo = st.file_uploader(
-        "Envie o arquivo posicional gerado para o TCE-CE",
+        "Envie o arquivo gerado para o TCE-CE",
         type=None,
         key=f"upload_validacao_{tipo_selecionado}",
     )
@@ -37,39 +31,53 @@ def render_validacao_page():
     if arquivo is None:
         st.stop()
 
-    conteudo = arquivo.read().decode("latin-1")  # arquivos do TCE costumam vir em latin-1
+    conteudo = arquivo.read().decode("latin-1")
 
-    if config["formato"] == "posicional":
-        registros = validar_arquivo_posicional(conteudo, config["schema"], config["regras"])
-    else:
-        registros = validar_arquivo_delimitado(conteudo, config["schema"], config["regras"])
-
-    total = len(registros)
-    invalidos = [r for r in registros if not r.valido]
-    validos = total - len(invalidos)
+    # Usa motor Polars unificado
+    resultado = validar_arquivo(conteudo, tipo_selecionado)
+    
+    total = resultado["total_registros"]
+    total_invalidos = resultado["total_invalidos"]
+    validos = total - total_invalidos
+    linhas_invalidas = resultado["linhas_invalidas"]
+    df_erros = resultado["df_erros"]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Total de registros", total)
     col2.metric("✅ Válidos", validos)
-    col3.metric("❌ Com divergência", len(invalidos))
+    col3.metric("❌ Com divergência", total_invalidos)
 
-    if not invalidos:
+    if total_invalidos == 0:
         st.success("Nenhuma divergência encontrada. Arquivo pronto para envio ao TCE-CE.")
         return
 
     st.subheader("Registros com divergência")
 
-    linhas_erro = []
-    for registro in invalidos:
-        for erro in registro.erros:
-            linhas_erro.append({"Linha": registro.linha, "Erro": erro, **registro.campos})
+    # Converte df_erros (Polars) para pandas para exibição
+    df_erros_pd = df_erros.to_pandas()
+    
+    # Agrupa erros por linha para melhor visualização
+    erros_agrupados = []
+    for linha in sorted(linhas_invalidas):
+        erros_linha = df_erros_pd[df_erros_pd["_linha_num"] == linha]
+        erros_formatados = []
+        for _, row in erros_linha.iterrows():
+            campo_check = row["campo_check"]
+            erro = row["erro"]
+            erros_formatados.append(f"**{campo_check}**: {erro}")
+        
+        erros_agrupados.append({
+            "Linha": linha,
+            "Erros": " | ".join(erros_formatados),
+        })
 
-    df_erros = pd.DataFrame(linhas_erro)
-    st.dataframe(df_erros, use_container_width=True)
+    df_display = pd.DataFrame(erros_agrupados)
+    st.dataframe(df_display, use_container_width=True)
 
+    # Download do relatório completo
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df_erros.to_excel(writer, index=False, sheet_name="Divergencias")
+        df_erros_pd.to_excel(writer, index=False, sheet_name="Erros_Detalhados")
     buffer.seek(0)
 
     st.download_button(
