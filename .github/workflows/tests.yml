@@ -30,6 +30,8 @@ jobs:
           pip install pytest  # garante pytest mesmo se não estiver no requirements.txt
 
       - name: Rodar testes
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: pytest tests/ -v
 
       - name: Publicar resumo no job (quando os testes falham)
