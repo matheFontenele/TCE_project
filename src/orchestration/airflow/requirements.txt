@@ -1,0 +1,10 @@
+pandas
+requests
+openpyxl
+pyarrow
+tqdm
+reportlab
+watchdog>=4.0.0
+duckdb==1.0.0
+schedule
+streamlit

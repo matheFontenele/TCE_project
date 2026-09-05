@@ -1,4 +1,7 @@
 services:
+  # ==========================================
+  # APLICAÇÃO (STREAMLIT)
+  # ==========================================
   app:
     build: .
     container_name: tce_app
@@ -18,20 +21,9 @@ services:
     command: streamlit run src/app.py --server.port=8501 --server.address=0.0.0.0
     restart: unless-stopped
 
-  # SERVIÇO NOVO: O Robô Agendador Mensal
-  robo_agendador:
-    build: .
-    container_name: tce_robo
-    environment:
-      - TZ=America/Fortaleza
-    volumes:
-      - .:/app
-      - /app/__pycache__
-      - /app/venv
-      - /app/.git
-    command: python src/worker_extrator.py
-    restart: unless-stopped
-
+  # ==========================================
+  # EXTRATOR MANUAL / BACKFILL
+  # ==========================================
   extrator:
     build: .
     container_name: tce_extrator
@@ -45,15 +37,108 @@ services:
     command: python src/main.py 2024 2026
     restart: "no"
 
+  # ==========================================
+  # CLI / WIZARD
+  # ==========================================
   cli:
     build: .
-    profiles: ["tools"]          # 🛡️ O ESCUDO: O comando 'up' ignora este serviço!
-    stdin_open: true             # Equivalente ao -i (Mantém o canal de texto aberto)
-    tty: true                    # Equivalente ao -t (Engana o Python dizendo que há um monitor)
+    profiles: ["tools"]
+    stdin_open: true
+    tty: true
     environment:
       - TZ=America/Fortaleza
     volumes:
       - .:/app
       - /app/__pycache__
       - /app/venv
-    command: python src/main.py  # Sem argumentos -> Força cair no Wizard!
+    command: python src/main.py
+
+  # ==========================================
+  # 🆕 ORQUESTRAÇÃO — AIRFLOW
+  # ==========================================
+  airflow-postgres:
+    image: postgres:16
+    container_name: tce_airflow_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: "10s"
+      timeout: "5s"
+      retries: 5
+    restart: unless-stopped
+
+  airflow-init:
+    build:
+      context: .
+      dockerfile: src/orchestration/airflow/Dockerfile
+    container_name: tce_airflow_init
+    user: root
+    command: >
+      bash -c "airflow db migrate &&
+      airflow users create --username admin --password admin
+      --firstname Admin --lastname Admin --role Admin
+      --email admin@example.com || true"
+    environment: &airflow_env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Fortaleza
+      AIRFLOW__CORE__DAGS_FOLDER: /app/src/orchestration/airflow/dags
+      PYTHONPATH: /app:/app/src
+      TZ: America/Fortaleza
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes: &airflow_volumes
+      - .:/app
+      - /app/__pycache__
+      - /app/venv
+      - /app/.git
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: src/orchestration/airflow/Dockerfile
+    container_name: tce_airflow_webserver
+    user: root
+    command: airflow webserver --port 8080
+    ports:
+      - "8085:8080"
+    environment: *airflow_env
+    volumes: *airflow_volumes
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: "30s"
+      timeout: "10s"
+      retries: 5
+    restart: unless-stopped
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: src/orchestration/airflow/Dockerfile
+    container_name: tce_airflow_scheduler
+    user: root
+    command: airflow scheduler
+    environment: *airflow_env
+    volumes: *airflow_volumes
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  airflow_postgres_data:

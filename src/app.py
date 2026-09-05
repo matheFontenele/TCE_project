@@ -7,6 +7,7 @@ from src.modules.extraction import render_extraction_page
 from src.modules.consultation import render_consultation_page
 from src.modules.compare import render_aba_comparacao
 from src.modules.validacao import render_validacao_page
+from src.modules.qualidade import render_qualidade_page
 
 st.set_page_config(page_title="Automação TCE-CE", page_icon="🤖", layout="wide")
 
@@ -55,7 +56,7 @@ if 'modo_tela' not in st.session_state:
 
 # Layout de Menu Superior
 st.title("🤖 Painel de Automação TCE-CE")
-col_nav1, col_nav2, col_nav3, col_nav4, col_spacer = st.columns([1.0, 1.0, 1.5, 1.2, 4])
+col_nav1, col_nav2, col_nav3, col_nav4, col_nav5, col_spacer = st.columns([1.0, 1.0, 1.5, 1.2, 1.3, 3])
 
 with col_nav1:
     if st.button("📊 Extração", key="btn_ext", 
@@ -81,6 +82,12 @@ with col_nav4:
         st.session_state.modo_tela = 'Validação'
         st.rerun()
 
+with col_nav5:
+    if st.button("📈 Qualidade", key="btn_qual",
+                 type="primary" if st.session_state.modo_tela == 'Qualidade' else "secondary"):
+        st.session_state.modo_tela = 'Qualidade'
+        st.rerun()
+
 st.divider()
 
 # Exibição do conteúdo
@@ -92,3 +99,5 @@ elif st.session_state.modo_tela == 'Comparação':
     render_aba_comparacao()
 elif st.session_state.modo_tela == 'Validação':
     render_validacao_page()
+elif st.session_state.modo_tela == 'Qualidade':
+    render_qualidade_page()

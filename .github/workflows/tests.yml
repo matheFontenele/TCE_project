@@ -1,0 +1,37 @@
+name: Testes Automatizados
+
+# Roda em todo push nas branches principais e em toda Pull Request que mira essas branches.
+# Ajuste "main"/"master" conforme o nome real da sua branch principal no GitHub.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Rodar pytest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"  # cacheia as dependências entre execuções, acelera o build
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest  # garante pytest mesmo se não estiver no requirements.txt
+
+      - name: Rodar testes
+        run: pytest tests/ -v
+
+      - name: Publicar resumo no job (quando os testes falham)
+        if: failure()
+        run: echo "::error::Testes falharam — verifique o log acima para identificar qual teste quebrou."

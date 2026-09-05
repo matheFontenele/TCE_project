@@ -8,3 +8,5 @@ reportlab
 watchdog>=4.0.0
 duckdb==1.0.0
 schedule
+great_expectations
+pytest
