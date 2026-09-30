@@ -38,27 +38,23 @@ def converter_df_para_xlsx_estilizado(df):
     is_subrow = df_export.duplicated(subset=['_chave_agrupamento'], keep='first')
     
     # Validação do Amarelo (Valor bate exatamente)
-    val_nota_padrao = padronizar_valor(df_export['Valor Total'])
+    coluna_valor_nota = 'Valor do Contas a Receber' if 'Valor do Contas a Receber' in df_export.columns else 'Valor Total'
+    val_nota_padrao = padronizar_valor(df_export[coluna_valor_nota])
     val_pago_padrao = padronizar_valor(df_export['Valor Pago (TCE)'])
     is_yellow = is_subrow & (val_nota_padrao == val_pago_padrao)
     
-    # =========================================================================
-    # 🔴 NOVA REGRA: MÁSCARA DE DIVERGÊNCIA DE DATA
-    # =========================================================================
-    if 'Última Data de Recebimento' in df_export.columns and 'Data Confirmação Pagto (TCE)' in df_export.columns:
-        data_fortes = padronizar_data(df_export['Última Data de Recebimento'])
-        data_tce = padronizar_data(df_export['Data Confirmação Pagto (TCE)'])
-        
-        # Só acusa divergência se for sub-linha, se forem diferentes, e se ambas existirem
-        is_date_divergent = is_subrow & (data_fortes != data_tce) & (data_tce != 'SEM_DATA') & (data_fortes != 'SEM_DATA')
-    else:
-        is_date_divergent = pd.Series([False] * len(df_export), index=df_export.index)
+    # A divergência de data é marcada apenas na célula "Data Ultimo Pagamento"
+    # pela máscara calculada após a consolidação dos pagamentos.
+    is_date_divergent = pd.Series([False] * len(df_export), index=df_export.index)
 
     # Converte tudo para string para podermos apagar os textos repetidos sem dar erro
     df_export = df_export.astype(str).replace('nan', '').replace('None', '')
     
     # Limpa os dados da nota nas sub-linhas, deixando APENAS os dados do pagamento fracionado
-    colunas_preservadas = ['Forma de Pagamento', 'Data Confirmação Pagto (TCE)', 'Valor Pago (TCE)', '_chave_agrupamento']
+    colunas_preservadas = [
+        'Forma de Pagamento', 'Forma de Pagamento_1', 'Número Pagamento', 'Data Confirmação Pagto (TCE)',
+        'Valor Pago (TCE)', '_chave_agrupamento'
+    ]
     colunas_para_limpar = [c for c in df_export.columns if c not in colunas_preservadas]
     for col in colunas_para_limpar:
         df_export.loc[is_subrow, col] = ""
@@ -67,7 +63,7 @@ def converter_df_para_xlsx_estilizado(df):
     df_export.loc[is_subrow, 'Forma de Pagamento'] = "  ↳ " + df_export.loc[is_subrow, 'Forma de Pagamento']
     
     # Apaga a coluna técnica de agrupamento ANTES de pegarmos os índices
-    df_export = df_export.drop(columns=['_chave_agrupamento'], errors='ignore')
+    df_export = df_export.drop(columns=['_chave_agrupamento', '_divergencia_data_ultimo_pagamento'], errors='ignore')
     
     # Pega a posição (index) exata da coluna de Data para pintarmos apenas ela
     try:
@@ -95,7 +91,28 @@ def converter_df_para_xlsx_estilizado(df):
             
         return estilos
         
-    df_styled = df_export.style.apply(pintar_linha_excel, axis=1)
+    idx_col_ultimo_pagamento = next(
+        (df_export.columns.get_loc(c) for c in ['Data Ultimo Pagamento', 'Última Data de Recebimento'] if c in df_export.columns),
+        -1,
+    )
+
+    def pintar_data_ultimo_pagamento(row):
+        idx = row.name
+        valor_celula = row.iloc[idx_col_ultimo_pagamento] if idx_col_ultimo_pagamento != -1 else ''
+        if idx_col_ultimo_pagamento != -1 and str(valor_celula).strip() and df.get('_divergencia_data_ultimo_pagamento', pd.Series(False, index=df.index)).iloc[idx]:
+            return ['background-color: #ff4b4b; color: #ffffff; font-weight: bold;' if i == idx_col_ultimo_pagamento else '' for i in range(len(row))]
+        return [''] * len(row)
+
+    # As extras são destacadas em laranja; em outros casos preserva-se a
+    # marcação existente de nota encontrada/subpagamento.
+    def pintar_linha_com_fonte(row):
+        idx = row.name
+        fonte = str(df_export.iloc[idx].get('Forma de Pagamento_1', '')).strip()
+        if is_subrow.iloc[idx] and fonte.startswith('Despesa Extra Orçamentária'):
+            return ['background-color: #f4b183; color: #7f3f00;'] * len(row)
+        return pintar_linha_excel(row)
+
+    df_styled = df_export.style.apply(pintar_linha_com_fonte, axis=1).apply(pintar_data_ultimo_pagamento, axis=1)
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_styled.to_excel(writer, index=False, sheet_name='Auditoria Fortes')
@@ -121,6 +138,20 @@ def padronizar_data(serie):
     s = s.str.split(r'[T\s]').str[0]
     dt = pd.to_datetime(s, errors='coerce', dayfirst=True)
     return dt.dt.strftime('%Y-%m-%d').fillna('SEM_DATA')
+
+def parse_data_flex(valor):
+    """Converte datas ISO, dd/mm/aaaa e YYYYMMDD dos Parquets/planilhas."""
+    if valor is None or pd.isna(valor):
+        return pd.NaT
+    texto = str(valor).strip()
+    if not texto or texto.lower() in {'nan', 'nat', 'none', 'null'}:
+        return pd.NaT
+    if re.fullmatch(r'\d{8}', texto):
+        try:
+            return pd.Timestamp(datetime.datetime.strptime(texto, '%Y%m%d'))
+        except ValueError:
+            return pd.NaT
+    return pd.to_datetime(texto, errors='coerce', dayfirst=True)
 
 def padronizar_valor(serie):
     def limpar_moeda(x):
@@ -219,7 +250,11 @@ def carregar_parquets_em_cache(caminhos_parquets):
         return pd.DataFrame()
     
     # 🎯 ADICIONADO: data_liquidacao no array alvo
-    colunas_alvo = ['numero_nota_fiscal', 'data_emissao', 'valor_liquido', 'codigo_municipio', 'numero_empenho', 'exercicio_orcamento', 'data_liquidacao']
+    colunas_alvo = [
+        'numero_nota_fiscal', 'data_emissao', 'valor_liquido', 'codigo_municipio',
+        'codigo_orgao', 'codigo_unidade_orcamentaria', 'numero_empenho',
+        'exercicio_orcamento', 'data_liquidacao'
+    ]
     dfs = []
     
     for c in caminhos_parquets:
@@ -278,8 +313,9 @@ def carregar_despesas_extra_cache(codigo_mun_busca):
         return pd.DataFrame()
 
     colunas_alvo = [
-        'codigo_municipio', 'numero_documento_despesa_extra', 'data_emissao_despesa_extra',
-        'valor_documento_despesa_extra', 'valor_deducao_despesa_extra',
+        'codigo_municipio', 'codigo_orgao', 'codigo_unidade_orcamentaria',
+        'numero_documento_despesa_extra', 'numero_documento_caixa', 'data_emissao_despesa_extra',
+        'valor_documento_despesa_extra', 'valor_deducao_despesa_extra', 'valor_deducao_extra',
         'nome_credor_despesa_extra', 'status_estorno_despesa_extra'
     ]
     dfs = []
@@ -287,7 +323,10 @@ def carregar_despesas_extra_cache(codigo_mun_busca):
         try:
             schema = pq.read_schema(c)
             cols_disp = [col for col in colunas_alvo if col in schema.names]
-            if 'valor_documento_despesa_extra' in cols_disp and 'nome_credor_despesa_extra' in cols_disp:
+            if {
+                'codigo_municipio', 'codigo_orgao', 'codigo_unidade_orcamentaria',
+                'data_emissao_despesa_extra', 'valor_documento_despesa_extra'
+            } <= set(cols_disp):
                 dfs.append(pd.read_parquet(c, columns=cols_disp))
         except Exception:
             continue
@@ -297,17 +336,23 @@ def carregar_despesas_extra_cache(codigo_mun_busca):
 
     df = pd.concat(dfs, ignore_index=True)
 
+    for coluna in ['numero_documento_despesa_extra', 'numero_documento_caixa', 'status_estorno_despesa_extra']:
+        if coluna not in df.columns:
+            df[coluna] = 0 if coluna == 'status_estorno_despesa_extra' else ''
+
     if 'status_estorno_despesa_extra' in df.columns:
         df = df[~df['status_estorno_despesa_extra'].fillna(0).astype(str).isin(['1', 'True', 'true'])]
 
     df['valor_documento_despesa_extra'] = pd.to_numeric(df['valor_documento_despesa_extra'], errors='coerce').fillna(0)
-    df['valor_deducao_despesa_extra'] = pd.to_numeric(df.get('valor_deducao_despesa_extra', 0), errors='coerce').fillna(0)
-    df['valor_liquido_extra'] = df['valor_documento_despesa_extra'] - df['valor_deducao_despesa_extra']
+    valor_deducao = df.get('valor_deducao_despesa_extra', df.get('valor_deducao_extra', 0))
+    df['valor_deducao_despesa_extra'] = pd.to_numeric(valor_deducao, errors='coerce').fillna(0)
+    # Regra definida para o pareamento: documento + dedução = valor da nota.
+    df['valor_total_extra'] = df['valor_documento_despesa_extra'] + df['valor_deducao_despesa_extra']
 
     df['codigo_municipio'] = df['codigo_municipio'].astype(str).str.strip().str.zfill(3)
-    df['nome_normalizado'] = df['nome_credor_despesa_extra'].apply(normalizar_nome_credor)
-    df['valor_rounded_liquido'] = padronizar_valor(df['valor_liquido_extra'])
-    df['valor_rounded_bruto'] = padronizar_valor(df['valor_documento_despesa_extra'])
+    df['codigo_orgao'] = df['codigo_orgao'].astype(str).str.strip().str.lstrip('0').replace('', '0')
+    df['codigo_unidade_orcamentaria'] = df['codigo_unidade_orcamentaria'].astype(str).str.strip()
+    df['valor_rounded_total'] = padronizar_valor(df['valor_total_extra'])
     df['data_emissao_despesa_extra'] = pd.to_datetime(
         df['data_emissao_despesa_extra'], errors='coerce'
     ).dt.strftime('%Y-%m-%d').fillna('')
@@ -381,6 +426,27 @@ def carregar_relatorio_fortes(arquivo_upload):
         df = df.loc[:, ~df.columns.astype(str).str.contains('^unnamed', case=False)]
         df.columns = df.columns.astype(str).str.replace('\n', ' ').str.replace('\r', '').str.strip()
         df = df.dropna(how='all', axis=1).dropna(how='all', axis=0)
+
+        # Os relatórios do Fortes podem variar em acentuação, caixa e pontuação
+        # dos títulos. Padroniza apenas os nomes conhecidos usados pela auditoria.
+        def chave_coluna(nome):
+            nome = unicodedata.normalize('NFKD', str(nome))
+            nome = ''.join(c for c in nome if not unicodedata.combining(c))
+            return re.sub(r'[^a-z0-9]', '', nome.lower())
+
+        nomes_esperados = {
+            'Documento': {'documento', 'numerodocumento', 'numerodanota'},
+            'Data de Emissão': {'datadeemissao', 'dataemissao', 'emissao'},
+            'Valor Total': {'valortotal', 'valordanota', 'totaldanota', 'valor'},
+            'Observação': {'observacao', 'observacoes', 'observacaodanota'},
+        }
+        renomear = {}
+        for canonico, aliases in nomes_esperados.items():
+            for coluna in df.columns:
+                if chave_coluna(coluna) in aliases:
+                    renomear[coluna] = canonico
+                    break
+        df = df.rename(columns=renomear)
         
         return df
     except Exception as e:
@@ -394,6 +460,13 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     
     df_f = df_fortes.copy()
     df_t = df_tce.copy()
+
+    # Algumas versões antigas dos parquets de notas fiscais não incluem
+    # órgão/unidade. Mantém o cruzamento principal funcional nesses arquivos;
+    # despesas extras só casarão quando esses campos estiverem disponíveis.
+    for coluna in ['codigo_orgao', 'codigo_unidade_orcamentaria']:
+        if coluna not in df_t.columns:
+            df_t[coluna] = ''
 
     # --- 1. Identifica o código do município base ---
     codigo_mun_busca = "000"
@@ -426,10 +499,6 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         for k, v in mapa_negociantes.items()
     ]) if mapa_negociantes else pd.DataFrame(columns=['mun', 'ano', 'emp', 'nome_limpo'])
 
-    df_extra = carregar_despesas_extra_cache(codigo_mun_busca)
-    if df_extra.empty:
-        df_extra = pd.DataFrame(columns=['codigo_municipio', 'nome_normalizado', 'valor_rounded_liquido', 'valor_rounded_bruto', 'data_emissao_despesa_extra'])
-
     # --- 5. O Farejador de Municípios no Fortes ---
     if municipio_selecionado != "Todos":
         df_f['_mun_adivinhado'] = str(municipio_selecionado).zfill(3)
@@ -448,7 +517,6 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     con.register('raw_fortes', df_f)
     con.register('raw_tce', df_t)
     con.register('raw_ponte', df_ponte)
-    con.register('raw_extra', df_extra)
 
     # ---------------------------------------------------------
     # VIEW 1: FORTES
@@ -461,7 +529,7 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         WHERE _nota_limpa != '0'
     """)
 
-        # ---------------------------------------------------------
+    # ---------------------------------------------------------
     # VIEW 2: TCE (Notas Fiscais + Nome do Fornecedor)
     # ---------------------------------------------------------
     con.execute("""
@@ -473,7 +541,9 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             (T._nota_limpa || '_' || T._val_limpo || '_' || LPAD(CAST(T.codigo_municipio AS VARCHAR), 3, '0')) AS CHAVE_NF,
             
             -- ⚠️ CHAVE ÚNICA de busca de pagamento (município + empenho)
-            (LPAD(CAST(T.codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(T.numero_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
+             (LPAD(CAST(T.codigo_municipio AS VARCHAR), 3, '0') || '_' || SUBSTRING(CAST(T.exercicio_orcamento AS VARCHAR), 1, 4) || '_' || REGEXP_REPLACE(LTRIM(TRIM(CAST(T.codigo_orgao AS VARCHAR)), '0'), '^$', '0') || '_' || TRIM(CAST(T.codigo_unidade_orcamentaria AS VARCHAR)) || '_' || CAST(T.numero_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
+             REGEXP_REPLACE(LTRIM(TRIM(CAST(T.codigo_orgao AS VARCHAR)), '0'), '^$', '0') AS orgao_limpo,
+             TRIM(CAST(T.codigo_unidade_orcamentaria AS VARCHAR)) AS unidade_limpa,
             
             COALESCE(P.nome_limpo, '') AS nome_fornecedor
             
@@ -487,11 +557,12 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     """)
 
     # ---------------------------------------------------------
-    # VIEW 3: PAGAMENTOS UNIFICADOS (⚠️ TODOS os SELECTs com 4 colunas)
+    # VIEW 3: PAGAMENTOS (somente endpoint notas_pagamentos)
     # ---------------------------------------------------------
-    caminhos_pag = glob.glob(os.path.join(PASTA_TCE, f"notas_pagamentos_*_{codigo_mun_busca}.parquet"))
-    caminhos_chq = glob.glob(os.path.join(PASTA_TCE, f"cheques_notas_pagamentos_*_{codigo_mun_busca}.parquet"))
-    caminhos_fol = glob.glob(os.path.join(PASTA_TCE, f"notas_pagamentos_folhas_*_{codigo_mun_busca}.parquet"))
+    caminhos_pag = [
+        caminho for caminho in glob.glob(os.path.join(PASTA_TCE, f"notas_pagamentos_*_{codigo_mun_busca}.parquet"))
+        if 'notas_pagamentos_folhas_' not in os.path.basename(caminho)
+    ]
 
     uniao_blocos = []
 
@@ -512,66 +583,17 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
         str_val_pag = f"CAST({col_val_pag} AS VARCHAR)" if col_val_pag != "''" else "''"
         uniao_blocos.append(f"""
             SELECT
-                (LPAD(CAST(codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(numero_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
+                (LPAD(CAST(codigo_municipio AS VARCHAR), 3, '0') || '_' || SUBSTRING(CAST(exercicio_orcamento AS VARCHAR), 1, 4) || '_' || REGEXP_REPLACE(LTRIM(TRIM(CAST(codigo_orgao AS VARCHAR)), '0'), '^$', '0') || '_' || TRIM(CAST(codigo_unidade_orcamentaria AS VARCHAR)) || '_' || CAST(numero_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
                 CAST(data_nota_pagamento AS VARCHAR) AS data_pagamento,
                 'Nota de Pagamento' AS tipo_pagamento,
-                {str_val_pag} AS valor_pagamento
+                {str_val_pag} AS valor_pagamento,
+                CAST(numero_nota_pagamento AS VARCHAR) AS numero_pagamento
             FROM read_parquet([{','.join(arq_pag)}], union_by_name=True)
             WHERE numero_empenho IS NOT NULL
         """)
 
-    # 2. CHEQUES
-    arq_chq = []
-    col_val_chq = 'NULL'
-    for p in caminhos_chq:
-        if os.path.exists(p):
-            schema = pq.read_schema(p).names
-            if 'numero_nota_empenho' in schema:
-                arq_chq.append(f"'{p}'")
-                if col_val_chq == 'NULL':
-                    col_val_chq = escolher_coluna_valor(
-                        schema, ['valor_cheque', 'valor_pago', 'valor_bruto']
-                    ) or "''"
-
-    if arq_chq:
-        str_val_chq = f"CAST({col_val_chq} AS VARCHAR)" if col_val_chq != "''" else "''"
-        uniao_blocos.append(f"""
-            SELECT
-                (LPAD(CAST(codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(numero_nota_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
-                CAST(data_emissao_cheque AS VARCHAR) AS data_pagamento,
-                'Cheque' AS tipo_pagamento,
-                {str_val_chq} AS valor_pagamento
-            FROM read_parquet([{','.join(arq_chq)}], union_by_name=True)
-            WHERE numero_nota_empenho IS NOT NULL
-        """)
-
-    # 3. FOLHAS
-    arq_fol = []
-    col_val_fol = 'NULL'
-    for p in caminhos_fol:
-        if os.path.exists(p):
-            schema = pq.read_schema(p).names
-            if 'numero_nota_empenho' in schema:
-                arq_fol.append(f"'{p}'")
-                if col_val_fol == 'NULL':
-                    col_val_fol = escolher_coluna_valor(
-                        schema, ['valor_folha', 'valor_pago', 'valor_bruto']
-                    ) or "''"
-
-    if arq_fol:
-        str_val_fol = f"CAST({col_val_fol} AS VARCHAR)" if col_val_fol != "''" else "''"
-        uniao_blocos.append(f"""
-            SELECT
-                (LPAD(CAST(codigo_municipio AS VARCHAR), 3, '0') || '_' || CAST(numero_nota_empenho AS VARCHAR)) AS CHAVE_BUSCA_PAGAMENTO,
-                CAST(data_emissao_folha AS VARCHAR) AS data_pagamento,
-                'Folha de Pagto' AS tipo_pagamento,
-                {str_val_fol} AS valor_pagamento
-            FROM read_parquet([{','.join(arq_fol)}], union_by_name=True)
-            WHERE numero_nota_empenho IS NOT NULL
-        """)
-
     # ---------------------------------------------------------
-    # VIEW 3a: PAGAMENTOS "OFICIAIS" (Nota de Pagamento, Cheque, Folha)
+    # Tabela de pagamentos proveniente apenas de Notas de Pagamento
     # ---------------------------------------------------------
     if uniao_blocos:
         con.execute("CREATE VIEW view_pagamentos_base AS " + " UNION ALL ".join(uniao_blocos))
@@ -581,36 +603,14 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
             SELECT '' AS CHAVE_BUSCA_PAGAMENTO,
                    '' AS data_pagamento,
                    '' AS tipo_pagamento,
-                   '' AS valor_pagamento
+                   '' AS valor_pagamento,
+                   CAST(NULL AS VARCHAR) AS numero_pagamento
             WHERE 1=0
         """)
 
     # ---------------------------------------------------------
-    #  VIEW 3b: DESPESA EXTRA SÓ ENTRA SE NÃO HOUVER PAGAMENTO OFICIAL
-    # ---------------------------------------------------------
-    if not df_extra.empty:
-        con.execute("""
-            CREATE VIEW view_pagamentos_unificados AS
-            SELECT * FROM view_pagamentos_base
-            UNION ALL
-            SELECT
-                TCE.CHAVE_BUSCA_PAGAMENTO AS CHAVE_BUSCA_PAGAMENTO,
-                EXTRA.data_emissao_despesa_extra AS data_pagamento,
-                'Despesa Extra Orçamentária' AS tipo_pagamento,
-                CAST(EXTRA.valor_rounded_liquido AS VARCHAR) AS valor_pagamento
-            FROM raw_extra AS EXTRA
-            JOIN view_tce AS TCE
-              ON LPAD(CAST(EXTRA.codigo_municipio AS VARCHAR), 3, '0') = TCE.mun_limpo
-             AND EXTRA.nome_normalizado != ''
-             AND EXTRA.nome_normalizado = TCE.nome_fornecedor
-             AND (EXTRA.valor_rounded_liquido = TCE._val_limpo OR EXTRA.valor_rounded_bruto = TCE._val_limpo)
-            WHERE NOT EXISTS (
-                SELECT 1 FROM view_pagamentos_base B
-                WHERE B.CHAVE_BUSCA_PAGAMENTO = TCE.CHAVE_BUSCA_PAGAMENTO
-            )
-        """)
-    else:
-        con.execute("CREATE VIEW view_pagamentos_unificados AS SELECT * FROM view_pagamentos_base")
+    # A auditoria considera exclusivamente o endpoint notas_pagamentos.
+    con.execute("CREATE VIEW view_pagamentos_unificados AS SELECT * FROM view_pagamentos_base")
 
         # ==============================================================================
     # 🎯 A MEGA QUERY DE CRUZAMENTO (EXPANSIVA)
@@ -633,7 +633,8 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
                 ELSE 'Não Pago'
             END AS "Status Pagamento",
             
-            PAG.tipo_pagamento AS "Forma de Pagamento",
+            PAG.tipo_pagamento AS "Forma de Pagamento_1",
+            PAG.numero_pagamento AS "Número Pagamento",
             PAG.data_pagamento AS "Data Confirmação Pagto (TCE)",
             PAG.valor_pagamento AS "Valor Pago (TCE)"
             
@@ -669,18 +670,21 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
     df_relatorio = df_relatorio.drop(columns=[col for col in colunas_para_remover if col in df_relatorio.columns])
 
     # ==============================================================================
-    # 🔥 FUNIL DE PAGAMENTOS — deixa EXATAMENTE o pagamento certo (lógica do modal)
+    # 🔥 FUNIL DE PAGAMENTOS — considera apenas Notas de Pagamento
     # ==============================================================================
     PRIORIDADE_FONTE = {
         'Nota de Pagamento': 1,
-        'Cheque': 2,
-        'Folha de Pagto': 3,
-        'Despesa Extra Orçamentária': 4,
     }
 
-    df_relatorio['_prio_fonte'] = df_relatorio['Forma de Pagamento'].map(PRIORIDADE_FONTE).fillna(99)
+    df_relatorio['_prio_fonte'] = df_relatorio['Forma de Pagamento_1'].map(PRIORIDADE_FONTE).fillna(99)
     df_relatorio['_val_pago_cmp'] = padronizar_valor(df_relatorio['Valor Pago (TCE)'])
-    df_relatorio['_val_nota_cmp'] = padronizar_valor(df_relatorio['Valor Total'])
+    df_relatorio['_ordem_data_pagamento'] = df_relatorio['Data Confirmação Pagto (TCE)'].map(parse_data_flex)
+    # O relatório auxiliar do Fortes pode trazer o valor rateado em "Valor"
+    # (ex.: 5.800,54), enquanto o valor integral da nota está em
+    # "Valor do Contas a Receber" (ex.: 6.093,00). Usa a mesma coluna da chave
+    # de cruzamento para comparar pagamentos com o total da nota.
+    coluna_valor_nota = valor_f if valor_f in df_relatorio.columns else 'Valor Total'
+    df_relatorio['_val_nota_cmp'] = padronizar_valor(df_relatorio[coluna_valor_nota])
 
     blocos = []
     for _, grp in df_relatorio.groupby('_chave_agrupamento', sort=False):
@@ -704,30 +708,46 @@ def processar_cruzamento_fortes(df_fortes, df_tce, caminhos_nf_tce, nf_f, data_f
 
         # ETAPA 3: dedupe de duplicados exatos
         pagos = pagos.drop_duplicates(
-            subset=['Forma de Pagamento', 'Data Confirmação Pagto (TCE)', '_val_pago_cmp']
+            subset=['Forma de Pagamento', 'Número Pagamento', 'Data Confirmação Pagto (TCE)', '_val_pago_cmp']
         )
 
-        blocos.append(pagos.sort_values('Data Confirmação Pagto (TCE)'))
+        # A linha principal (primeira) deve representar o pagamento mais recente;
+        # os pagamentos anteriores ficam como sublinhas recolhidas no Excel.
+        blocos.append(pagos.sort_values('_ordem_data_pagamento', ascending=False, na_position='last'))
 
     df_relatorio = (
         pd.concat(blocos)
-        .sort_values(['_chave_agrupamento', 'Data Confirmação Pagto (TCE)'])
+        .sort_values(['_chave_agrupamento', '_ordem_data_pagamento'], ascending=[True, False], na_position='last')
         .reset_index(drop=True)
     )
-    df_relatorio = df_relatorio.drop(columns=['_prio_fonte', '_val_pago_cmp', '_val_nota_cmp'])
+
+    col_data_fortes = next(
+        (c for c in ['Data Ultimo Pagamento', 'Última Data de Recebimento'] if c in df_relatorio.columns),
+        None,
+    )
+    df_relatorio['_divergencia_data_ultimo_pagamento'] = False
+    if col_data_fortes and 'Data Confirmação Pagto (TCE)' in df_relatorio.columns:
+        datas_pagamento = df_relatorio['Data Confirmação Pagto (TCE)'].map(parse_data_flex)
+        ultimas_por_nota = datas_pagamento.groupby(df_relatorio['_chave_agrupamento']).transform('max')
+        datas_fortes = df_relatorio[col_data_fortes].map(parse_data_flex)
+        tem_datas = ultimas_por_nota.notna() & datas_fortes.notna()
+        df_relatorio['_divergencia_data_ultimo_pagamento'] = (
+            tem_datas & (ultimas_por_nota.dt.normalize() != datas_fortes.dt.normalize())
+        )
+
+    df_relatorio = df_relatorio.drop(columns=['_prio_fonte', '_val_pago_cmp', '_val_nota_cmp', '_ordem_data_pagamento'])
 
     # Bônus visual: data sem o "T00:00:00"
     if 'Data Confirmação Pagto (TCE)' in df_relatorio.columns:
-        df_relatorio['Data Confirmação Pagto (TCE)'] = (
-            pd.to_datetime(df_relatorio['Data Confirmação Pagto (TCE)'], errors='coerce')
-            .dt.strftime('%d/%m/%Y')
-            .fillna('')
+        df_relatorio['Data Confirmação Pagto (TCE)'] = df_relatorio['Data Confirmação Pagto (TCE)'].map(
+            lambda valor: parse_data_flex(valor).strftime('%d/%m/%Y')
+            if pd.notna(parse_data_flex(valor)) else ''
         )
     
     qtd_ambos = df_relatorio[df_relatorio['Status TCE'] == 'Encontrado']['_chave_agrupamento'].nunique()
     qtd_so_fortes = df_relatorio[df_relatorio['Status TCE'] == 'Não Encontrado']['_chave_agrupamento'].nunique()
     qtd_pagas = df_relatorio[df_relatorio['Status Pagamento'] == 'Pago']['_chave_agrupamento'].nunique()
-    qtd_pagas_extra = df_relatorio[df_relatorio['Forma de Pagamento'].astype(str).str.contains('Despesa Extra', na=False)]['_chave_agrupamento'].nunique()
+    qtd_pagas_extra = 0
     
     qtd_tce_unico = con.execute("SELECT COUNT(DISTINCT CHAVE_NF) FROM view_tce").fetchone()[0]
     qtd_so_tce = max(0, qtd_tce_unico - qtd_ambos)
@@ -798,15 +818,29 @@ def render_bloco_fortes():
         caminhos_completos = [os.path.join(PASTA_TCE, arq) for arq in selecionados_tce]
         df_tce_filtrado = carregar_parquets_em_cache(caminhos_completos)
 
-        nf_f, data_f, valor_f, obs_f = 'Documento', 'Data de Emissão', 'Valor Total', 'Observação'
+        nf_f, data_f, obs_f = 'Documento', 'Data de Emissão', 'Observação'
+        # No relatório "Contas a Receber - Ficha Financeira", "Valor" pode ser
+        # o valor rateado/recebido; a nota integral costuma estar em
+        # "Valor do Contas a Receber". Prioriza esta última quando disponível.
+        valor_f = (
+            'Valor do Contas a Receber'
+            if 'Valor do Contas a Receber' in df_fortes.columns
+            else 'Valor Total'
+        )
         nf_t, data_t, valor_t = 'numero_nota_fiscal', 'data_emissao', 'valor_liquido'
 
         if st.button("Iniciar", type="primary", use_container_width=True):
             
-            colunas_faltando_fortes = [c for c in [nf_f, data_f, valor_f, obs_f] if c not in df_fortes.columns]
+            # Observação é mantida como parâmetro legado, mas não é usada no
+            # cruzamento. Não deve impedir a auditoria em relatórios sem esse campo.
+            colunas_faltando_fortes = [c for c in [nf_f, data_f, valor_f] if c not in df_fortes.columns]
             
             if colunas_faltando_fortes:
-                st.error(f"🚨 ERRO: O arquivo do Fortes importado não possui as colunas obrigatórias: {colunas_faltando_fortes}.")
+                st.error(
+                    f"🚨 O arquivo do Fortes não possui as colunas obrigatórias: {colunas_faltando_fortes}. "
+                    f"Colunas encontradas: {list(df_fortes.columns)}. "
+                    "Confira se foi enviado o relatório de notas fiscais do Fortes."
+                )
             else:
                 with st.spinner("Extraindo Pagamentos, Despesas Extra e Consolidando Relatório..."):
                     df_relatorio, qtd_ambos, qtd_so_fortes, qtd_so_tce, qtd_pagas, qtd_pagas_extra, total_fortes, df_debug_f, df_debug_t = processar_cruzamento_fortes(

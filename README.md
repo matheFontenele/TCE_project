@@ -16,5 +16,16 @@ Para iniciar o sistema pela primeira vez ou realizar uma nova extração:
 - **Visualização:** Utilize as abas superiores para navegar entre os dados de "Notas de Empenho" e "Notas Fiscais".
 - **Dados:** Os arquivos resultantes ficam salvos automaticamente na pasta `data/`.
 
+## Consultas dos Parquets no DataGrip (DuckDB)
+
+Os dados Parquet permanecem na pasta `data/`; o arquivo `tce.duckdb` contém apenas views que apontam para esses arquivos e é gerado localmente, não devendo ser enviado ao GitHub.
+
+1. Instale as dependências do projeto, incluindo DuckDB e PyArrow.
+2. Feche/desconecte no DataGrip a conexão com `tce.duckdb` antes de recriar as views.
+3. Na raiz do projeto, execute `python scripts/criar_views.py`.
+4. No DataGrip, conecte-se ao arquivo `tce.duckdb` e atualize o schema `main`.
+
+O script encontra a pasta `data/` relativa à sua localização, ignora Parquets vazios usados como marcadores e cria uma view por tabela, combinando os arquivos com `union_by_name`. Para atualizar as views depois de baixar novos Parquets, basta repetir os passos 2–4.
+
 ## Suporte
 Em caso de erro ou necessidade de atualização, contate o responsável pelo desenvolvimento do sistema.

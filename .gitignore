@@ -15,6 +15,7 @@ __pycache__/
 # Ignora a pasta de dados e arquivos de resultados
 data/
 data_internal/
+tce.duckdb
 *.csv
 *.json
 # O "!" inverte a regra: mantém o município.json que é essencial para o script
