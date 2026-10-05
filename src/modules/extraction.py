@@ -27,6 +27,18 @@ _rate_limit_lock = threading.Lock()
 _rate_limit_until = 0.0
 
 
+def _pausa_http_400(tentativa, nome_arquivo):
+    """Aplica backoff global para HTTP 400, que o TCE também pode usar ao bloquear chamadas."""
+    base = max(1, int(os.getenv("TCE_HTTP_400_BACKOFF_SECONDS", "60")))
+    maximo = max(base, int(os.getenv("TCE_HTTP_400_MAX_BACKOFF_SECONDS", "300")))
+    espera = min(maximo, base * (2 ** (tentativa - 1)))
+    _definir_rate_limit(espera)
+    logging.warning(
+        "[TCE][HTTP_400] %s tentativa %s; pausando chamadas por %.0f s antes de tentar novamente.",
+        nome_arquivo, tentativa, espera,
+    )
+
+
 def _aguardar_rate_limit():
     """Aplica o resfriamento global quando uma thread recebe HTTP 429."""
     with _rate_limit_lock:
@@ -299,6 +311,7 @@ def processar_lote(task):
             
             # 🛡️ Mini-loop de tolerância a falhas de rede/SSL (Backoff Exponencial)
             max_tentativas = 5
+            max_tentativas_400 = max(1, int(os.getenv("TCE_HTTP_400_RETRIES", "3")))
             response = None
             
             for tentativa in range(1, max_tentativas + 1):
@@ -323,6 +336,20 @@ def processar_lote(task):
                         )
                         if tentativa == max_tentativas:
                             return "RATE_LIMIT", f"[RATE_LIMIT] {nome_arquivo}: HTTP 429 após {max_tentativas} tentativas; pausa solicitada de {espera:.0f}s."
+                        continue
+                    if response.status_code == 400:
+                        corpo_erro = (response.text or "").strip().replace("\n", " ")[:1000]
+                        logging.warning(
+                            "[TCE][HTTP_400] %s | tentativa %s/%s | URL=%s | resposta=%s",
+                            nome_arquivo, tentativa, max_tentativas_400,
+                            response.url, corpo_erro or "<vazia>",
+                        )
+                        if tentativa >= max_tentativas_400:
+                            return "ERRO_API", (
+                                f"❌ Erro na API para {nome_arquivo}: Status 400 após "
+                                f"{max_tentativas_400} tentativas; resposta: {corpo_erro or '<vazia>'}"
+                            )
+                        _pausa_http_400(tentativa, nome_arquivo)
                         continue
                     break  # resposta recebida; valida o status abaixo
                 except (requests.exceptions.SSLError, requests.exceptions.RequestException) as e:
