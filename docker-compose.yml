@@ -89,6 +89,7 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Fortaleza
       AIRFLOW__CORE__DAGS_FOLDER: /app/src/orchestration/airflow/dags
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY}
       PYTHONPATH: /app:/app/src
       TZ: America/Fortaleza
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
