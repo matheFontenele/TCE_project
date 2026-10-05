@@ -29,15 +29,18 @@ def calcular_anos_alvo(hoje=None):
     return min(anos_envolvidos), max(anos_envolvidos)
 
 
-def executar_extracao_por_anos(ano_inicio, ano_fim):
-    """Dispara o main.py. Se falhar, o erro sobe para o Airflow (retry automatico)."""
+def executar_extracao_por_anos(ano_inicio, ano_fim, mes_fim=12):
+    """Dispara o main.py; qualquer falha pendente sobe para o Airflow."""
     raiz = _raiz_projeto()
     main_path = os.path.join(raiz, "src", "main.py")
-    comando = [sys.executable, main_path, str(ano_inicio), str(ano_fim)]
+    comando = [sys.executable, main_path, str(ano_inicio), str(ano_fim), str(mes_fim)]
+    ambiente = os.environ.copy()
+    ambiente["TCE_AIRFLOW_RUN"] = "1"
 
-    print(f"🚀 Disparando comando: {' '.join(comando)}")
-    processo = subprocess.run(comando, check=True, cwd=raiz)
-    print(f"✅ Extracao concluida (codigo {processo.returncode}).")
+    print(f"[BACKFILL][INICIO] Período {ano_inicio}-01 até {ano_fim}-{mes_fim:02d}", flush=True)
+    print(f"[BACKFILL][COMANDO] {' '.join(comando)}", flush=True)
+    processo = subprocess.run(comando, check=True, cwd=raiz, env=ambiente)
+    print(f"[BACKFILL][FIM] Extração concluída (código {processo.returncode}).", flush=True)
     return processo.returncode
 
 

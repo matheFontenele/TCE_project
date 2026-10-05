@@ -13,7 +13,7 @@ def carregar_json_seguro(caminho):
     try:
         with open(caminho, 'r', encoding='utf-8') as f:
             conteudo_arquivo = json.load(f)
-        
+
             if isinstance(conteudo_arquivo, dict):
                 return conteudo_arquivo.get("elements", conteudo_arquivo)
             
@@ -29,11 +29,11 @@ def questionar_municipio(lista_muns):
     
     while True:
         resp = input("\n🏙️  \033[1mMUNICÍPIO\033[0m [Código exato | 'L' para Listar | 'T' ou Enter para Todos]: ").strip().upper()
-        
+
         if resp in ['T', '']:
             print("   └── Alvo: \033[33mTodos os Municípios do Estado\033[0m")
             return None
-        
+
         if resp == 'L':
             print("\n   ─── LISTA OFICIAL DE MUNICÍPIOS (TCE-CE) ───")
             muns_ord = sorted(lista_muns, key=lambda x: x['nome_municipio'])
@@ -122,12 +122,15 @@ def questionar_anos():
 # =========================================================================
 if __name__ == "__main__":
     def log_colorido_terminal(msg):
-        msg_formatada = formatar_log_terminal(msg)
-        tqdm.write(msg_formatada)
+        if os.getenv("TCE_AIRFLOW_RUN") == "1":
+            print(msg, flush=True)
+        else:
+            tqdm.write(formatar_log_terminal(msg))
 
     anos_alvos = []
     mun_alvo = None
     endpoints_alvo = None
+    mes_fim = 12
 
     # 1. ENCRUZILHADA DE COMPORTAMENTO
     if len(sys.argv) > 1:
@@ -137,6 +140,7 @@ if __name__ == "__main__":
         # =====================================================================
         ano_inicio = int(sys.argv[1])
         ano_fim = int(sys.argv[2]) if len(sys.argv) >= 3 else ano_inicio
+        mes_fim = int(sys.argv[3]) if len(sys.argv) >= 4 else 12
         anos_alvos = list(range(min(ano_inicio, ano_fim), max(ano_inicio, ano_fim) + 1))
         
         print(f"\033[36m🤖 [MODO AUTÔNOMO] Disparando extração em lote para: {anos_alvos}\033[0m")
@@ -179,17 +183,30 @@ if __name__ == "__main__":
     print(f"\n\033[36m🚀 Inicializando pool de threads...\033[0m")
 
     try:
+        falhas_totais = 0
         for ano in anos_alvos:
             print(f"\n\033[34m📅 Processando lote consolidado do ano: {ano}\033[0m")
-            executar_pipeline(
+            resumo = executar_pipeline(
                 ano=ano,
                 municipio_selecionado=mun_alvo,
                 endpoints_alvo=endpoints_alvo,
-                log_func=log_colorido_terminal
+                log_func=log_colorido_terminal,
+                mes_max=mes_fim if ano == max(anos_alvos) else 12,
             )
-            
-        print("\n\033[32m✅ Ingestão finalizada com sucesso absoluto!\033[0m\n")
-        
+            falhas_totais += resumo.get("erros", 0)
+            if resumo.get("erros", 0):
+                print(
+                    f"[BACKFILL][PAUSADO] Ano {ano} terminou com "
+                    f"{resumo['erros']} falhas/pendências. O Airflow retomará os arquivos "
+                    "ausentes na próxima tentativa/execução.",
+                    flush=True,
+                )
+                break
+
+        if falhas_totais:
+            sys.exit(2)
+        print("\n✅ Ingestão finalizada sem falhas pendentes.\n", flush=True)
+
     except KeyboardInterrupt:
         print("\n\033[31m🛑 Interrompido à força (Ctrl+C). Fechando conexões...\033[0m\n")
         sys.exit(1)

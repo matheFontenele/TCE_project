@@ -9,8 +9,11 @@ import threading
 import concurrent.futures
 import json
 import datetime
+import logging
+import sys
 from pathlib import Path
 from tqdm import tqdm
+import pyarrow.parquet as pq
 
 
 # ==============================================================
@@ -20,6 +23,42 @@ from tqdm import tqdm
 PASTA_DADOS = "/app/data"
 # Cria um armazenamento local por thread para garantir isolamento e thread-safety
 thread_local = threading.local()
+_rate_limit_lock = threading.Lock()
+_rate_limit_until = 0.0
+
+
+def _aguardar_rate_limit():
+    """Aplica o resfriamento global quando uma thread recebe HTTP 429."""
+    with _rate_limit_lock:
+        espera = max(0.0, _rate_limit_until - time.monotonic())
+    if espera > 0:
+        logging.warning("[TCE][RATE_LIMIT] Pausando novas chamadas por %.1f s", espera)
+        time.sleep(espera)
+
+
+def _definir_rate_limit(segundos):
+    global _rate_limit_until
+    with _rate_limit_lock:
+        _rate_limit_until = max(_rate_limit_until, time.monotonic() + segundos)
+
+
+def _parquet_valido(caminho):
+    """Retorna True se o arquivo é um Parquet legível, inclusive marcador vazio."""
+    try:
+        pq.ParquetFile(caminho).metadata
+        return True
+    except Exception:
+        return False
+
+
+def _salvar_parquet_atomico(df, caminho):
+    temporario = f"{caminho}.tmp"
+    try:
+        df.to_parquet(temporario, engine="pyarrow", compression="snappy")
+        os.replace(temporario, caminho)
+    finally:
+        if os.path.exists(temporario):
+            os.remove(temporario)
 
 # Carrega a lista de municípios do arquivo JSON para uso na geração das tarefas de extração
 def carregar_municipios():
@@ -230,9 +269,12 @@ def processar_lote(task):
     caminho_arquivo = task['caminho_arquivo']
     nome_arquivo = os.path.basename(caminho_arquivo)
     
-    # Checkpoint: se o arquivo já existe (seja com dados ou fantasma), pula instantaneamente!
+    # Arquivos válidos (inclusive marcadores de consulta vazia) são checkpoints.
+    # Arquivos truncados/corrompidos não bloqueiam a retomada do backfill.
     if os.path.exists(caminho_arquivo):
-        return "IGNORADO", f"⏭️ Ignorado: {nome_arquivo} já existe."
+        if _parquet_valido(caminho_arquivo):
+            return "IGNORADO", f"[IGNORADO] {nome_arquivo}: Parquet válido já existe."
+        logging.warning("[RECUPERAR][PARQUET_INVALIDO] %s será baixado novamente.", nome_arquivo)
 
     time.sleep(0.7)  # Pequena pausa para evitar picos de requisições em loops rápidos
 
@@ -259,7 +301,8 @@ def processar_lote(task):
             max_tentativas = 5
             response = None
             
-            for tentativa in range(max_tentativas):
+            for tentativa in range(1, max_tentativas + 1):
+                _aguardar_rate_limit()
                 try:
                     response = session.get(
                         task['url'], 
@@ -267,13 +310,27 @@ def processar_lote(task):
                         params=task['params'], 
                         timeout=45
                     )
-                    break  # Conectou com sucesso? Sai do loop de retentativa
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        try:
+                            espera = min(900.0, max(1.0, float(retry_after))) if retry_after else min(900.0, 30.0 * (2 ** (tentativa - 1)))
+                        except (TypeError, ValueError):
+                            espera = min(900.0, 30.0 * (2 ** (tentativa - 1)))
+                        _definir_rate_limit(espera)
+                        logging.warning(
+                            "[TCE][429] %s tentativa %s/%s; aguardando %.0f s (Retry-After=%s)",
+                            nome_arquivo, tentativa, max_tentativas, espera, retry_after or "ausente",
+                        )
+                        if tentativa == max_tentativas:
+                            return "RATE_LIMIT", f"[RATE_LIMIT] {nome_arquivo}: HTTP 429 após {max_tentativas} tentativas; pausa solicitada de {espera:.0f}s."
+                        continue
+                    break  # resposta recebida; valida o status abaixo
                 except (requests.exceptions.SSLError, requests.exceptions.RequestException) as e:
-                    if tentativa == max_tentativas - 1:
+                    if tentativa == max_tentativas:
                         return "ERRO_CONEXAO", f"❌ Derrubado pelo TCE após {max_tentativas} tentativas em {nome_arquivo}: {str(e)}"
                     
                     # Se deu erro de SSL/Conexão, fechamos a conexão atual para não travar o pool
-                    tempo_espera = (tentativa + 1) * 7
+                    tempo_espera = min(120, tentativa * 7)
                     time.sleep(tempo_espera)
                     session = obter_sessao(forcar_nova=True)
             
@@ -313,18 +370,18 @@ def processar_lote(task):
             if df.empty:
                 # 👻 CACHE NEGATIVO 1: A API mandou lixo de outro ano.
                 if int(task['ano_referencia']) < ano_atual:
-                    pd.DataFrame().to_parquet(caminho_arquivo, engine='pyarrow', compression='snappy')
+                    _salvar_parquet_atomico(pd.DataFrame(), caminho_arquivo)
                     return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Lixo descartado. Fantasma criado."
                 return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Descartado por inconsistência de ano."
             # ==============================================================
 
             df['municipio_referencia'] = task['municipio_nome']
-            df.to_parquet(caminho_arquivo, engine='pyarrow', compression='snappy')
+            _salvar_parquet_atomico(df, caminho_arquivo)
             return "BAIXADO", f"✅ Criado com sucesso: {nome_arquivo} ({len(df)} linhas)"
 
         # 👻 CACHE NEGATIVO 2: A API não retornou absolutamente nada.
         if int(task['ano_referencia']) < ano_atual:
-            pd.DataFrame().to_parquet(caminho_arquivo, engine='pyarrow', compression='snappy')
+            _salvar_parquet_atomico(pd.DataFrame(), caminho_arquivo)
             return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Ignorando Requisição."
 
         return "VAZIO", f"⚠️ Vazio: {nome_arquivo} - Sem registros (Ignorado no cache de {ano_atual})."
@@ -333,7 +390,7 @@ def processar_lote(task):
         return "ERRO_CONEXAO", f"❌ Erro inesperado em {nome_arquivo}: {str(e)}"
 
 # Gera a lista de tarefas a partir dos filtros aplicados na interface do Streamlit
-def gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=None):
+def gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=None, mes_max=12):
     """Gera tarefas dinamicamente lendo URLs, frequências e parâmetros do endpoints.json."""
     municipios = carregar_municipios()
     if municipio_selecionado:
@@ -407,7 +464,7 @@ def gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=None):
             continue
 
         # Decide quantas iterações baseado na frequência
-        iteracoes_mensais = range(1, 13) if freq == "mensal" else [None]
+        iteracoes_mensais = range(1, min(12, max(1, int(mes_max))) + 1) if freq == "mensal" else [None]
 
         for mes in iteracoes_mensais:
             for m in municipios:
@@ -432,28 +489,35 @@ def gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=None):
     return lista_de_tarefas
 
 # Renderiza a página de extração no Streamlit, com os controles de filtro e a área de logs
-def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_func=print):
+def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_func=print, mes_max=12):
     os.makedirs('data', exist_ok=True)
     periodo_str = f"Ano {ano}"
 
     log_func(f"🚀 [{periodo_str}] Calculando fila de ingestão...")
 
     # 1. A chamada já nasce acoplada com a nova assinatura dinâmica:
-    tarefas = gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=endpoints_alvo)
+    tarefas = gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=endpoints_alvo, mes_max=mes_max)
     
     if not tarefas:
         log_func(f"⚠️ [{periodo_str}] Nenhuma tarefa gerada para os critérios informados.")
-        return
+        return {"baixados": 0, "ignorados": 0, "vazios": 0, "erros": 0, "tarefas": 0}
 
     log_func(f"📦 [{periodo_str}] Matriz montada: {len(tarefas)} requisições prontas para despacho.")
 
-    baixados, ignorados, erros = 0, 0, 0
-    erros_consecutivos = 0  
+    baixados, ignorados, vazios, erros = 0, 0, 0, 0
+    erros_consecutivos = 0
+    pendentes_interrompidas = 0
     
     # max_workers=3 é o "Ponto Doce" comprovado para não tomar IP Ban de firewall governamental
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futuros = {executor.submit(processar_lote, tarefa): tarefa for tarefa in tarefas}
-        pbar = tqdm(concurrent.futures.as_completed(futuros), total=len(tarefas), desc=f"Ingerindo {periodo_str}")
+        modo_airflow = os.getenv("TCE_AIRFLOW_RUN") == "1"
+        pbar = tqdm(
+            concurrent.futures.as_completed(futuros),
+            total=len(tarefas),
+            desc=f"Ingerindo {periodo_str}",
+            disable=modo_airflow or not getattr(sys.stdout, "isatty", lambda: False)(),
+        )
         
         for futuro in pbar:
             try:
@@ -463,28 +527,30 @@ def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_
                 # 🛡️ UPGRADE 1: O Termômetro de Saúde Expandido
                 # ==============================================================
                 # Soma erro se caiu a internet (ERRO_CONEXAO), se o servidor deles engasgou (ERRO_API) ou WAF 429
-                if status in ["ERRO_CONEXAO", "ERRO_API"] or "Status 429" in msg_log or "Status 50" in msg_log:
+                if status in ["ERRO_CONEXAO", "ERRO_API", "RATE_LIMIT"] or "Status 50" in msg_log:
                     erros_consecutivos += 1
                 else:
                     erros_consecutivos = 0  # Tomou fôlego e deu certo? Zera o contador.
                 
                 # Defesa Nível 1: Resfriamento (O servidor do Estado deu uma engasgada)
-                if erros_consecutivos == 15: 
-                    log_func("🚨 [WAF ALERTA] TCE barrando requisições da API. Dormindo 30s para esfriar o IP...")
-                    time.sleep(30)
-                
-                # ==============================================================
-                # 💀 UPGRADE 2: O "Circuit Breaker" Nuclear (Salva-Vidas)
-                # ==============================================================
-                elif erros_consecutivos >= 30:
-                    log_func("💀 [CIRCUIT BREAKER] Portal do TCE indisponível. Abortando fila para não travar o servidor!")
-                    executor.shutdown(wait=False, cancel_futures=True) # Ejetar!
+                if erros_consecutivos >= 15:
+                    erros += 1  # inclui a falha que atingiu o limite do circuit breaker
+                    log_func(msg_log)
+                    pendentes_interrompidas = sum(1 for f in futuros if not f.done())
+                    log_func(
+                        f"🚨 [TCE][CIRCUIT BREAKER] {erros_consecutivos} falhas consecutivas; "
+                        f"interrompendo. {pendentes_interrompidas} tarefas serão retomadas na próxima execução."
+                    )
+                    executor.shutdown(wait=False, cancel_futures=True)
                     break
-                # ==============================================================
 
                 # Despacho de Log blindado contra closures/lambdas do Streamlit
                 nome_func_log = getattr(log_func, '__name__', '')
-                if nome_func_log == "log_colorido_terminal":
+                if status == "BAIXADO" or status in ["RATE_LIMIT", "ERRO_API", "ERRO_CONEXAO"]:
+                    log_func(msg_log)
+                elif modo_airflow:
+                    pass
+                elif nome_func_log == "log_colorido_terminal":
                     log_func(msg_log)
                 elif log_func == print:
                     pbar.write(msg_log)
@@ -493,6 +559,7 @@ def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_
                 
                 if status == "BAIXADO": baixados += 1
                 elif status == "IGNORADO": ignorados += 1
+                elif status == "VAZIO": vazios += 1
                 else: erros += 1
 
             except Exception as e:
@@ -501,7 +568,21 @@ def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_
                 erros += 1
                 erros_consecutivos += 1 
 
-    log_func(f"🏁 [{periodo_str}] Ingestão finalizada -> 📥 {baixados} novos | ⏭️ {ignorados} já no HD | ⚠️ {erros} falhas.")
+    erros += pendentes_interrompidas
+    resumo = {
+        "baixados": baixados,
+        "ignorados": ignorados,
+        "vazios": vazios,
+        "erros": erros,
+        "pendentes_interrompidas": pendentes_interrompidas,
+        "tarefas": len(tarefas),
+    }
+    log_func(
+        f"[RESUMO][{periodo_str}] tarefas={len(tarefas)} baixados={baixados} "
+        f"ja_existentes={ignorados} sem_dados={vazios} "
+        f"falhas_pendentes={erros} interrompidas={pendentes_interrompidas}"
+    )
+    return resumo
 
 def render_extraction_page():
     # --- INICIALIZAÇÃO DO ESTADO GLOBAL ---
