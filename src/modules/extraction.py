@@ -488,6 +488,22 @@ def gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=None, mes_max=12):
 
     return lista_de_tarefas
 
+def _formatar_log_tarefa_airflow(status, mensagem):
+    """Converte o resultado do worker em uma linha legível no log do Airflow."""
+    if status == "BAIXADO":
+        conteudo = mensagem.replace("✅ Criado com sucesso:", "").strip()
+        correspondencia = re.match(r"(.+?)\s+\((\d+) linhas\)$", conteudo)
+        if correspondencia:
+            arquivo, linhas = correspondencia.groups()
+            return f"│ 🟢 [SALVO]    │ {arquivo:<65} │ ({linhas} linhas)"
+        return f"[SALVO] {conteudo}"
+    if status == "IGNORADO":
+        return mensagem
+    if status == "VAZIO":
+        return mensagem.replace("⚠️ Vazio:", "[VAZIO]").strip()
+    return mensagem
+
+
 # Renderiza a página de extração no Streamlit, com os controles de filtro e a área de logs
 def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_func=print, mes_max=12):
     os.makedirs('data', exist_ok=True)
@@ -507,11 +523,22 @@ def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_
     baixados, ignorados, vazios, erros = 0, 0, 0, 0
     erros_consecutivos = 0
     pendentes_interrompidas = 0
+    modo_airflow = os.getenv("TCE_AIRFLOW_RUN") == "1"
+    inicio = time.monotonic()
+    ultimo_log_progresso = inicio
+    concluidas = 0
+    intervalo_progresso = 1000
+    intervalo_segundos = 15
+
+    if modo_airflow:
+        log_func(
+            f"[PROGRESSO][{periodo_str}] Iniciando verificação de {len(tarefas):,} arquivos "
+            "(válidos serão ignorados; ausentes/inválidos serão baixados)."
+        )
     
     # max_workers=3 é o "Ponto Doce" comprovado para não tomar IP Ban de firewall governamental
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futuros = {executor.submit(processar_lote, tarefa): tarefa for tarefa in tarefas}
-        modo_airflow = os.getenv("TCE_AIRFLOW_RUN") == "1"
         pbar = tqdm(
             concurrent.futures.as_completed(futuros),
             total=len(tarefas),
@@ -546,10 +573,10 @@ def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_
 
                 # Despacho de Log blindado contra closures/lambdas do Streamlit
                 nome_func_log = getattr(log_func, '__name__', '')
-                if status == "BAIXADO" or status in ["RATE_LIMIT", "ERRO_API", "ERRO_CONEXAO"]:
+                if modo_airflow:
+                    log_func(_formatar_log_tarefa_airflow(status, msg_log))
+                elif status == "BAIXADO" or status in ["RATE_LIMIT", "ERRO_API", "ERRO_CONEXAO"]:
                     log_func(msg_log)
-                elif modo_airflow:
-                    pass
                 elif nome_func_log == "log_colorido_terminal":
                     log_func(msg_log)
                 elif log_func == print:
@@ -564,9 +591,33 @@ def executar_pipeline(ano, municipio_selecionado=None, endpoints_alvo=None, log_
 
             except Exception as e:
                 msg_falha = f"❌ Erro crítico de alocação em thread isolada: {e}"
-                pbar.write(msg_falha) if log_func == print else log_func(msg_falha)
+                if modo_airflow:
+                    log_func(f"[ERRO][THREAD] {msg_falha}")
+                else:
+                    pbar.write(msg_falha) if log_func == print else log_func(msg_falha)
                 erros += 1
                 erros_consecutivos += 1 
+            finally:
+                concluidas += 1
+                agora = time.monotonic()
+                if modo_airflow and (
+                    concluidas % intervalo_progresso == 0
+                    or agora - ultimo_log_progresso >= intervalo_segundos
+                    or concluidas == len(tarefas)
+                ):
+                    decorrido = max(agora - inicio, 0.001)
+                    taxa = concluidas / decorrido
+                    restantes = max(0, len(tarefas) - concluidas)
+                    eta_segundos = int(restantes / taxa) if taxa > 0 else 0
+                    percentual = concluidas * 100 / len(tarefas)
+                    log_func(
+                        f"[PROGRESSO][{periodo_str}] {concluidas:,}/{len(tarefas):,} "
+                        f"({percentual:.1f}%) | salvos={baixados} ignorados={ignorados} "
+                        f"vazios={vazios} falhas={erros} | {taxa:.1f} arquivos/s "
+                        f"| ETA~{eta_segundos // 3600:02d}:{(eta_segundos % 3600) // 60:02d}:"
+                        f"{eta_segundos % 60:02d}"
+                    )
+                    ultimo_log_progresso = agora
 
     erros += pendentes_interrompidas
     resumo = {

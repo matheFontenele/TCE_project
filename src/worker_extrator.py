@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import subprocess
+import logging
 from datetime import datetime
 
 try:
@@ -33,15 +34,40 @@ def executar_extracao_por_anos(ano_inicio, ano_fim, mes_fim=12):
     """Dispara o main.py; qualquer falha pendente sobe para o Airflow."""
     raiz = _raiz_projeto()
     main_path = os.path.join(raiz, "src", "main.py")
-    comando = [sys.executable, main_path, str(ano_inicio), str(ano_fim), str(mes_fim)]
+    comando = [sys.executable, "-u", main_path, str(ano_inicio), str(ano_fim), str(mes_fim)]
     ambiente = os.environ.copy()
     ambiente["TCE_AIRFLOW_RUN"] = "1"
 
-    print(f"[BACKFILL][INICIO] Período {ano_inicio}-01 até {ano_fim}-{mes_fim:02d}", flush=True)
-    print(f"[BACKFILL][COMANDO] {' '.join(comando)}", flush=True)
-    processo = subprocess.run(comando, check=True, cwd=raiz, env=ambiente)
-    print(f"[BACKFILL][FIM] Extração concluída (código {processo.returncode}).", flush=True)
-    return processo.returncode
+    logger = logging.getLogger("airflow.task")
+    logger.info("[BACKFILL][INICIO] Período %s-01 até %s-%02d", ano_inicio, ano_fim, mes_fim)
+    logger.info("[BACKFILL][COMANDO] %s", " ".join(comando))
+
+    processo = subprocess.Popen(
+        comando,
+        cwd=raiz,
+        env=ambiente,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        if processo.stdout is not None:
+            for linha in processo.stdout:
+                linha = linha.rstrip()
+                if linha:
+                    logger.info("[EXTRATOR] %s", linha)
+    finally:
+        if processo.stdout is not None:
+            processo.stdout.close()
+
+    codigo_saida = processo.wait()
+    if codigo_saida != 0:
+        logger.error("[BACKFILL][FALHA] Processo terminou com código %s", codigo_saida)
+        raise subprocess.CalledProcessError(codigo_saida, comando)
+
+    logger.info("[BACKFILL][OK] Extração concluída (código %s).", codigo_saida)
+    return codigo_saida
 
 
 def executar_extracao_mensal(hoje=None):
