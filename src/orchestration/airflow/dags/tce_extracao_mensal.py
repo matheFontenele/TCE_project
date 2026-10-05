@@ -3,7 +3,7 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from airflow.decorators import dag, task
@@ -76,6 +76,7 @@ def tce_extracao_mensal():
             "ano_fim": referencia.year,
             "mes_fim": referencia.month,
             "referencia": referencia.isoformat(),
+            "validar_linhas_desde": datetime.now(timezone.utc).isoformat(),
         }
         logging.info(
             "[BACKFILL][JANELA] Verificação de 2008-01 até %04d-%02d (referência %s)",
@@ -101,6 +102,43 @@ def tce_extracao_mensal():
         logging.info("[BACKFILL][OK] Extração finalizada sem falhas pendentes.")
         return janela
 
+    @task(task_id="validar_parquets", execution_timeout=timedelta(hours=2))
+    def validar_parquets(janela: dict):
+        from src.quality.parquet_validator import validar_pasta_parquets, salvar_relatorio
+
+        logging.info(
+            "[VALIDAÇÃO][INICIO] Inspecionando Parquets em %s; validação de linhas desde %s.",
+            PROJECT_ROOT / "data", janela["validar_linhas_desde"],
+        )
+        resultado = validar_pasta_parquets(
+            PROJECT_ROOT / "data",
+            validar_linhas_desde=datetime.fromisoformat(janela["validar_linhas_desde"]),
+        )
+        destino = PROJECT_ROOT / "data_quality" / "reports" / (
+            f"parquet_validation_{janela['referencia']}.json"
+        )
+        salvar_relatorio(resultado, destino)
+
+        logging.info(
+            "[VALIDAÇÃO][RESUMO] arquivos=%s válidos=%s marcadores_vazios=%s "
+            "erros_estruturais=%s avisos=%s linhas_verificadas=%s relatório=%s",
+            resultado["arquivos_encontrados"], resultado["arquivos_validos"],
+            resultado["marcadores_sem_dados"], resultado["erros_estruturais"],
+            resultado["avisos"], resultado["linhas_verificadas"], destino,
+        )
+        for issue in resultado["issues"]:
+            logging.warning(
+                "[VALIDAÇÃO][%s][%s] %s | %s",
+                issue["nivel"], issue["codigo"], issue["arquivo"], issue["mensagem"],
+            )
+        if resultado["issues_truncadas"]:
+            logging.warning(
+                "[VALIDAÇÃO] %s achados adicionais foram omitidos do log; consulte o relatório JSON.",
+                resultado["issues_truncadas"],
+            )
+        logging.info("[VALIDAÇÃO][MODO_RELATÓRIO] A validação não bloqueia a atualização das views nesta fase.")
+        return janela
+
     @task(task_id="atualizar_views_duckdb", execution_timeout=timedelta(hours=1))
     def atualizar_views(janela: dict):
         script = PROJECT_ROOT / "scripts" / "criar_views.py"
@@ -124,7 +162,7 @@ def tce_extracao_mensal():
             raise RuntimeError(f"criar_views.py terminou com código {codigo_saida}")
         logging.info("[DUCKDB][OK] Views atualizadas em %s/tce.duckdb.", PROJECT_ROOT)
 
-    atualizar_views(executar_extracao(calcular_janela()))
+    atualizar_views(validar_parquets(executar_extracao(calcular_janela())))
 
 
 tce_extracao_mensal()
