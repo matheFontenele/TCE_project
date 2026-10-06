@@ -459,9 +459,13 @@ def gerar_tarefas(ano, municipio_selecionado, endpoints_alvo=None, mes_max=12):
                 if mes is not None:
                     params[param] = int(f"{ano}{str(mes).zfill(2)}")
             elif param == "data_inicio":
-                params[param] = f"{ano}-01-01"
+                mes_inicio = int(mes) if mes is not None else 1
+                params[param] = f"{int(ano):04d}{mes_inicio:02d}01"
             elif param == "data_fim":
-                params[param] = f"{ano}-12-31"
+                mes_fim = int(mes) if mes is not None else 12
+                primeiro_dia_mes_seguinte = datetime.date(int(ano), mes_fim, 1) + datetime.timedelta(days=32)
+                ultimo_dia_mes = primeiro_dia_mes_seguinte.replace(day=1) - datetime.timedelta(days=1)
+                params[param] = ultimo_dia_mes.strftime("%Y%m%d")
             # Adicione aqui novos parâmetros conforme forem surgindo
             # elif param == "outro_param":
             #     params[param] = ...

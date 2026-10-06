@@ -399,7 +399,7 @@
         "endpoint": "https://api-dados-abertos.tce.ce.gov.br/sim/bens_incorporados_patrimonio_municipio",
         "prefixo": "bens_incorporados_patrimonio_municipio",
         "frequencia": "mensal",
-        "parametros_obrigatorios": ["codigo_municipio", "data_referencia_doc"],
+        "parametros_obrigatorios": ["codigo_municipio", "data_inicio", "data_fim"],
         "campos_ui": [],
         "colunas_texto": {
             "numero_registro": "Nº Tombamento / Registro",
