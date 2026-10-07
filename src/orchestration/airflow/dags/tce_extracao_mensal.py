@@ -162,6 +162,39 @@ def tce_extracao_mensal():
             raise RuntimeError(f"criar_views.py terminou com código {codigo_saida}")
         logging.info("[DUCKDB][OK] Views atualizadas em %s/tce.duckdb.", PROJECT_ROOT)
 
+        trino_url = os.getenv("TRINO_URL")
+        if trino_url:
+            catalog_script = PROJECT_ROOT / "scripts" / "atualizar_catalogo_trino.py"
+            if not catalog_script.is_file():
+                raise FileNotFoundError(
+                    f"Script de atualização do catálogo Trino não encontrado: {catalog_script}"
+                )
+            ambiente = os.environ.copy()
+            ambiente.update({
+                "TRINO_URL": trino_url,
+                "DATA_DIR": str(PROJECT_ROOT / "data"),
+                "TRINO_DATA_DIR": str(PROJECT_ROOT / "trino_runtime"),
+                "TRINO_SOURCE_DIR": "/data",
+            })
+            logging.info("[TRINO][INICIO] Atualizando tabelas externas após a carga de Parquet.")
+            resultado = subprocess.run(
+                [sys.executable, "-u", str(catalog_script)],
+                cwd=str(PROJECT_ROOT),
+                env=ambiente,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            for linha in resultado.stdout.splitlines():
+                logging.info("[TRINO] %s", linha)
+            for linha in resultado.stderr.splitlines():
+                logging.warning("[TRINO] %s", linha)
+            if resultado.returncode != 0:
+                raise RuntimeError(
+                    f"atualizar_catalogo_trino.py terminou com código {resultado.returncode}"
+                )
+            logging.info("[TRINO][OK] Catálogo de consultas atualizado.")
+
     atualizar_views(validar_parquets(executar_extracao(calcular_janela())))
 
 

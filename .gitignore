@@ -30,6 +30,7 @@ Thumbs.db
 .env
 run.bat
 data_quality/
+trino_runtime/
 
 # --- Logs ---
 *.log

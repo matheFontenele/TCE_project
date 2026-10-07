@@ -93,6 +93,8 @@ services:
       PYTHONPATH: /app:/app/src
       TZ: America/Fortaleza
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      TRINO_URL: http://trino:8080/v1/statement
+      TRINO_USER: airflow
     volumes: &airflow_volumes
       - .:/app
       - /app/__pycache__
@@ -139,7 +141,76 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+      trino:
+        condition: service_healthy
     restart: unless-stopped
+
+  # ==========================================
+  # CONSULTAS SQL NOS PARQUETS (POC)
+  # ==========================================
+  hive-metastore:
+    image: apache/hive:4.0.1
+    container_name: tce_hive_metastore
+    command: >
+      bash -lc "schematool -dbType derby -initSchema --ifNotExists &&
+      hive --service metastore"
+    environment:
+      SERVICE_NAME: metastore
+      HIVE_METASTORE_PORT: 9083
+      TZ: America/Fortaleza
+    volumes:
+      - trino_metastore_data:/opt/hive/data/warehouse
+      - ./data:/data:ro
+      - ./trino_runtime:/trino-data
+    ports:
+      - "127.0.0.1:9083:9083"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  trino:
+    image: trinodb/trino:476
+    container_name: tce_trino
+    depends_on:
+      hive-metastore:
+        condition: service_healthy
+    volumes:
+      - ./trino/etc:/etc/trino:ro
+      - ./data:/data:ro
+      - ./trino_runtime:/trino-data:ro
+    ports:
+      - "127.0.0.1:8089:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  trino-bootstrap:
+    image: python:3.12-slim
+    container_name: tce_trino_bootstrap
+    profiles: ["trino-bootstrap"]
+    depends_on:
+      trino:
+        condition: service_healthy
+    environment:
+      TRINO_URL: http://trino:8080/v1/statement
+      TRINO_USER: bootstrap
+      DATA_DIR: /data
+      TRINO_DATA_DIR: /trino-data
+      TRINO_SOURCE_DIR: /data
+    volumes:
+      - ./data:/data:ro
+      - ./trino_runtime:/trino-data
+      - ./scripts/atualizar_catalogo_trino.py:/bootstrap.py:ro
+    command: >
+      bash -lc "pip install --no-cache-dir pyarrow==19.0.1 && python /bootstrap.py"
+    restart: "no"
 
 volumes:
   airflow_postgres_data:
+  trino_metastore_data:
