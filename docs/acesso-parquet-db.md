@@ -24,8 +24,9 @@ PARQUET_DB_BIND_IP=172.16.0.200
 PARQUET_DB_PORT=5433
 ```
 
-Opcionalmente `PARQUET_DB_ADMIN_USER` (padrão `tce_admin`) e `PARQUET_DB_NAME`
-(padrão `tce`). Suba o serviço e faça a carga inicial:
+Opcionalmente `PARQUET_DB_ADMIN_USER` (padrão `tce_admin`), `PARQUET_DB_NAME`
+(padrão `tce`) e os limites de memória do DuckDB (ver abaixo). Suba o serviço e
+faça a carga inicial:
 
 ```bash
 docker compose up -d parquet-db
@@ -97,6 +98,27 @@ Para atualizar manualmente a qualquer momento:
 ```bash
 docker compose --profile parquet-init run --rm parquet-db-init
 ```
+
+## Memória (importante em servidores pequenos)
+
+O `duckdb.memory_limit` padrão é **4 GB por conexão** — num host com pouca RAM
+isso faz o kernel matar o Postgres (OOM) ao materializar as tabelas grandes.
+Por isso o serviço sobe com limites menores, ajustáveis no `.env`:
+
+```dotenv
+PARQUET_DB_MEMORY_LIMIT=1536     # MB de RAM para o DuckDB (padrão 1536)
+PARQUET_DB_TEMP_LIMIT=30GB       # teto do spool em disco (padrão 30GB)
+```
+
+Com o limite baixo, o DuckDB transborda para o disco em vez de encher a RAM. O
+script também abre e fecha uma conexão por tabela: cada conexão tem sua própria
+instância DuckDB, então a memória é liberada entre uma tabela e outra em vez de
+se acumular.
+
+Se o build ainda falhar com OOM, baixe `PARQUET_DB_MEMORY_LIMIT` (ex.: `1024`)
+e confirme que há espaço em disco para o spool. O container é reiniciado
+automaticamente após uma queda; basta rodar o refresh de novo — ele é
+idempotente e retoma do zero.
 
 ## Firewall (opcional)
 

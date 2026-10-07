@@ -154,6 +154,15 @@ services:
   parquet-db:
     image: pgduckdb/pgduckdb:16-v1.1.1
     container_name: tce_parquet_db
+    # O memory_limit padrão do DuckDB é 4 GB — quase toda a RAM de um host
+    # pequeno. Com um limite menor, o DuckDB transborda para o disco em vez de
+    # o kernel matar o Postgres (OOM) ao materializar as tabelas grandes.
+    command:
+      - postgres
+      - -c
+      - duckdb.memory_limit=${PARQUET_DB_MEMORY_LIMIT:-1536}
+      - -c
+      - duckdb.max_temp_directory_size=${PARQUET_DB_TEMP_LIMIT:-30GB}
     environment:
       POSTGRES_USER: ${PARQUET_DB_ADMIN_USER:-tce_admin}
       POSTGRES_PASSWORD: ${PARQUET_DB_ADMIN_PASSWORD:?defina PARQUET_DB_ADMIN_PASSWORD no .env}

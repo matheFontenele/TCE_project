@@ -132,10 +132,36 @@ def trocar(cur, tabela: str) -> bool:
         return False
 
 
-def preparar_schemas(cur) -> None:
-    cur.execute(
-        sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(SCHEMA_STAGING))
-    )
+def atualizar_tabela(tabela: str, arquivos: list[str]) -> int:
+    """Constrói e troca uma tabela usando uma conexão própria.
+
+    Cada conexão cria a sua própria instância DuckDB, e a memória só volta ao
+    sistema quando o backend do Postgres encerra. Por isso abrimos e fechamos
+    uma conexão por tabela: sem isso, a memória consumida pelas tabelas
+    grandes se acumula até derrubar o Postgres (OOM) numa máquina pequena.
+    """
+    con = conexao()
+    try:
+        con.autocommit = True
+        cur = con.cursor()
+        linhas = construir(cur, tabela, arquivos)
+        trocada = trocar(cur, tabela)
+        if not trocada:
+            raise RuntimeError(f"troca de {tabela} abortada (lock)")
+        return linhas
+    finally:
+        con.close()  # encerra o backend e libera a memória do DuckDB
+
+
+def preparar_schemas() -> None:
+    con = conexao()
+    try:
+        con.autocommit = True
+        con.cursor().execute(
+            sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(SCHEMA_STAGING))
+        )
+    finally:
+        con.close()
 
 
 def main() -> int:
@@ -144,10 +170,7 @@ def main() -> int:
         log.error("Nenhum parquet válido em %s.", DATA_DIR)
         return 1
 
-    con = conexao()
-    con.autocommit = True
-    cur = con.cursor()
-    preparar_schemas(cur)
+    preparar_schemas()
 
     inicio = time.monotonic()
     trocadas = 0
@@ -156,20 +179,17 @@ def main() -> int:
         arquivos = grupos[tabela]
         try:
             t0 = time.monotonic()
-            linhas = construir(cur, tabela, arquivos)
-            if trocar(cur, tabela):
-                trocadas += 1
-                log.info(
-                    "%-58s %7d linhas  %5.1fs",
-                    tabela,
-                    linhas,
-                    time.monotonic() - t0,
-                )
+            linhas = atualizar_tabela(tabela, arquivos)
+            trocadas += 1
+            log.info(
+                "%-58s %7d linhas  %5.1fs",
+                tabela,
+                linhas,
+                time.monotonic() - t0,
+            )
         except Exception as erro:
             log.exception("Falha ao atualizar %s: %s", tabela, erro)
 
-    cur.close()
-    con.close()
     log.info(
         "Concluído: %d/%d tabelas atualizadas em %.1fs.",
         trocadas,
