@@ -39,7 +39,6 @@ def gerar_dataframe_detalhado(df_empenhos_filtrados, ano_inicial, ano_final, cod
         return pd.to_numeric(s, errors='coerce').fillna(0.0)
 
     chaves_base = ['codigo_municipio', 'codigo_orgao', 'numero_empenho']
-
     def processar_df_ano(df, ano_fallback):
         if df is None or df.empty:
             return None
@@ -57,6 +56,23 @@ def gerar_dataframe_detalhado(df_empenhos_filtrados, ano_inicial, ano_final, cod
             df['exercicio_ref'] = ""
         return df
 
+    df_empenhos_filtrados = processar_df_ano(df_empenhos_filtrados, None)
+    chaves = ['exercicio_ref'] + chaves_base
+    chaves_empenho = df_empenhos_filtrados[
+        [coluna for coluna in chaves if coluna in df_empenhos_filtrados.columns]
+    ].drop_duplicates()
+
+    def manter_apenas_empenhos_relacionados(df):
+        """Descarta movimentos que não podem se relacionar aos empenhos consultados."""
+        if df is None or df.empty:
+            return df
+        chaves_comuns = [coluna for coluna in chaves if coluna in df.columns and coluna in chaves_empenho.columns]
+        # Sem todas as chaves não é seguro filtrar: preserva o comportamento anterior.
+        if len(chaves_comuns) != len(chaves):
+            return df
+        chaves_validas = chaves_empenho[chaves].drop_duplicates()
+        return df.merge(chaves_validas, on=chaves, how='inner')
+
     # 1. Carregar bases correlatas em loop
     dfs_nf_acumulados = []
     dfs_pag_acumulados = []
@@ -70,6 +86,10 @@ def gerar_dataframe_detalhado(df_empenhos_filtrados, ano_inicial, ano_final, cod
 
         df_nf_ano = processar_df_ano(carregar_e_filtrar_func(arq_fiscais), ano_corrente)
         df_pag_ano = processar_df_ano(carregar_e_filtrar_func(arq_pag), ano_corrente)
+        # Filtra logo após cada leitura anual, evitando manter em memória os
+        # movimentos de empenhos que não estão na consulta atual.
+        df_nf_ano = manter_apenas_empenhos_relacionados(df_nf_ano)
+        df_pag_ano = manter_apenas_empenhos_relacionados(df_pag_ano)
 
         if df_nf_ano is not None and not df_nf_ano.empty:
             dfs_nf_acumulados.append(df_nf_ano)
@@ -78,9 +98,6 @@ def gerar_dataframe_detalhado(df_empenhos_filtrados, ano_inicial, ano_final, cod
 
     df_nf = pd.concat(dfs_nf_acumulados, ignore_index=True) if dfs_nf_acumulados else pd.DataFrame()
     df_pag = pd.concat(dfs_pag_acumulados, ignore_index=True) if dfs_pag_acumulados else pd.DataFrame()
-
-    df_empenhos_filtrados = processar_df_ano(df_empenhos_filtrados, None)
-    chaves = ['exercicio_ref'] + chaves_base
 
     # 2. Criar sequenciadores
     if not df_nf.empty:
