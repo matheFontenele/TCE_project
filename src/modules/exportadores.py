@@ -267,6 +267,36 @@ def renderizar_botoes_exportacao(
                             df_detalhado.fillna('').to_excel(
                                 writer, index=False, sheet_name='Auditoria_TCE'
                             )
+                            from openpyxl.styles import PatternFill
+
+                            ws = writer.sheets['Auditoria_TCE']
+                            cores_por_coluna = {
+                                '#FFF2CC': [
+                                    'data_nota_pagamento', 'valor_nota_pagamento',
+                                ],
+                                '#FCE4D6': [
+                                    'codigo_municipio', 'codigo_orgao', 'codigo_unidade',
+                                    'numero_empenho', 'codigo_elemento_despesa',
+                                    'valor_empenhado', 'nome_negociante',
+                                    'valor_empenhado_a_pagar',
+                                ],
+                                '#DDEBF7': ['numero_nota_pagamento', 'nu_documento_caixa'],
+                                '#E2EFDA': ['data_liquidacao', 'valor_liquidado'],
+                            }
+                            fills = {
+                                cor: PatternFill(fill_type='solid', fgColor=cor.lstrip('#'))
+                                for cor in cores_por_coluna
+                            }
+                            indices_colunas = {
+                                ws.cell(row=1, column=indice).value: indice
+                                for indice in range(1, ws.max_column + 1)
+                            }
+                            for cor, colunas in cores_por_coluna.items():
+                                for nome_coluna in colunas:
+                                    indice = indices_colunas.get(nome_coluna)
+                                    if indice is not None:
+                                        for linha in range(1, ws.max_row + 1):
+                                            ws.cell(row=linha, column=indice).fill = fills[cor]
                         st.session_state[state_key] = excel_buffer.getvalue()
             except Exception as e:
                 st.error(f"Erro ao gerar Excel Detalhado: {e}")
