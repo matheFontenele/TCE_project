@@ -18,6 +18,7 @@ data_internal/
 tce.duckdb
 *.csv
 *.json
+!trino/etc/access-control.json
 # O "!" inverte a regra: mantém o município.json que é essencial para o script
 !municipios.json
 !endpoints.json
@@ -30,7 +31,6 @@ Thumbs.db
 .env
 run.bat
 data_quality/
-trino_runtime/
 
 # --- Logs ---
 *.log

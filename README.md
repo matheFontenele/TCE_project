@@ -27,5 +27,12 @@ Os dados Parquet permanecem na pasta `data/`; o arquivo `tce.duckdb` contém ape
 
 O script encontra a pasta `data/` relativa à sua localização, ignora Parquets vazios usados como marcadores e cria uma view por tabela, combinando os arquivos com `union_by_name`. Para atualizar as views depois de baixar novos Parquets, basta repetir os passos 2–4.
 
+## Consultas dos Parquets pela rede (Postgres + pg_duckdb)
+
+Para que outras pessoas consultem os parquets por DBeaver/DataGrip sem acesso ao
+servidor, o projeto sobe um container Postgres com a extensão `pg_duckdb` que
+publica as tabelas via rede, somente leitura. Veja
+[`docs/acesso-parquet-db.md`](docs/acesso-parquet-db.md).
+
 ## Suporte
 Em caso de erro ou necessidade de atualização, contate o responsável pelo desenvolvimento do sistema.

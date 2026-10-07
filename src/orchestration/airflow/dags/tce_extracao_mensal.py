@@ -162,23 +162,25 @@ def tce_extracao_mensal():
             raise RuntimeError(f"criar_views.py terminou com código {codigo_saida}")
         logging.info("[DUCKDB][OK] Views atualizadas em %s/tce.duckdb.", PROJECT_ROOT)
 
-        trino_url = os.getenv("TRINO_URL")
-        if trino_url:
-            catalog_script = PROJECT_ROOT / "scripts" / "atualizar_catalogo_trino.py"
-            if not catalog_script.is_file():
+        # Reconstrói as tabelas de consulta no Postgres+pg_duckdb. Roda dentro
+        # do container do Airflow, que enxerga os parquets em /app/data; o
+        # container parquet-db os enxerga em /data (PARQUET_DB_SOURCE_DIR).
+        if os.getenv("PARQUET_DB_ADMIN_PASSWORD"):
+            refresh_script = PROJECT_ROOT / "scripts" / "refresh_parquet_db.py"
+            if not refresh_script.is_file():
                 raise FileNotFoundError(
-                    f"Script de atualização do catálogo Trino não encontrado: {catalog_script}"
+                    f"Script de atualização das tabelas não encontrado: {refresh_script}"
                 )
             ambiente = os.environ.copy()
             ambiente.update({
-                "TRINO_URL": trino_url,
                 "DATA_DIR": str(PROJECT_ROOT / "data"),
-                "TRINO_DATA_DIR": str(PROJECT_ROOT / "trino_runtime"),
-                "TRINO_SOURCE_DIR": "/data",
+                "PARQUET_DB_SOURCE_DIR": "/data",
+                "PARQUET_DB_HOST": os.getenv("PARQUET_DB_HOST", "parquet-db"),
+                "PARQUET_DB_PORT": os.getenv("PARQUET_DB_PORT", "5432"),
             })
-            logging.info("[TRINO][INICIO] Atualizando tabelas externas após a carga de Parquet.")
+            logging.info("[PARQUET-DB][INICIO] Atualizando tabelas de consulta após a carga.")
             resultado = subprocess.run(
-                [sys.executable, "-u", str(catalog_script)],
+                [sys.executable, "-u", str(refresh_script)],
                 cwd=str(PROJECT_ROOT),
                 env=ambiente,
                 capture_output=True,
@@ -186,14 +188,14 @@ def tce_extracao_mensal():
                 check=False,
             )
             for linha in resultado.stdout.splitlines():
-                logging.info("[TRINO] %s", linha)
+                logging.info("[PARQUET-DB] %s", linha)
             for linha in resultado.stderr.splitlines():
-                logging.warning("[TRINO] %s", linha)
+                logging.warning("[PARQUET-DB] %s", linha)
             if resultado.returncode != 0:
                 raise RuntimeError(
-                    f"atualizar_catalogo_trino.py terminou com código {resultado.returncode}"
+                    f"refresh_parquet_db.py terminou com código {resultado.returncode}"
                 )
-            logging.info("[TRINO][OK] Catálogo de consultas atualizado.")
+            logging.info("[PARQUET-DB][OK] Tabelas de consulta atualizadas.")
 
     atualizar_views(validar_parquets(executar_extracao(calcular_janela())))
 

@@ -93,8 +93,11 @@ services:
       PYTHONPATH: /app:/app/src
       TZ: America/Fortaleza
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
-      TRINO_URL: http://trino:8080/v1/statement
-      TRINO_USER: airflow
+      PARQUET_DB_HOST: parquet-db
+      PARQUET_DB_PORT: "5432"
+      PARQUET_DB_NAME: ${PARQUET_DB_NAME:-tce}
+      PARQUET_DB_ADMIN_USER: ${PARQUET_DB_ADMIN_USER:-tce_admin}
+      PARQUET_DB_ADMIN_PASSWORD: ${PARQUET_DB_ADMIN_PASSWORD:?defina PARQUET_DB_ADMIN_PASSWORD no .env}
     volumes: &airflow_volumes
       - .:/app
       - /app/__pycache__
@@ -141,76 +144,57 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
-      trino:
+      parquet-db:
         condition: service_healthy
     restart: unless-stopped
 
   # ==========================================
-  # CONSULTAS SQL NOS PARQUETS (POC)
+  # CONSULTAS SQL NOS PARQUETS (Postgres + pg_duckdb)
   # ==========================================
-  hive-metastore:
-    image: apache/hive:4.0.1
-    container_name: tce_hive_metastore
-    command: >
-      bash -lc "schematool -dbType derby -initSchema --ifNotExists &&
-      hive --service metastore"
+  parquet-db:
+    image: pgduckdb/pgduckdb:16-v1.1.1
+    container_name: tce_parquet_db
     environment:
-      SERVICE_NAME: metastore
-      HIVE_METASTORE_PORT: 9083
+      POSTGRES_USER: ${PARQUET_DB_ADMIN_USER:-tce_admin}
+      POSTGRES_PASSWORD: ${PARQUET_DB_ADMIN_PASSWORD:?defina PARQUET_DB_ADMIN_PASSWORD no .env}
+      POSTGRES_DB: ${PARQUET_DB_NAME:-tce}
       TZ: America/Fortaleza
     volumes:
-      - trino_metastore_data:/opt/hive/data/warehouse
       - ./data:/data:ro
-      - ./trino_runtime:/trino-data
+      - parquet_pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:9083:9083"
+      - "${PARQUET_DB_BIND_IP:-127.0.0.1}:${PARQUET_DB_PORT:-5433}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9083'"]
+      test: ["CMD-SHELL", "pg_isready -U ${PARQUET_DB_ADMIN_USER:-tce_admin} -d ${PARQUET_DB_NAME:-tce}"]
       interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 10
     restart: unless-stopped
 
-  trino:
-    image: trinodb/trino:476
-    container_name: tce_trino
-    depends_on:
-      hive-metastore:
-        condition: service_healthy
-    volumes:
-      - ./trino/etc:/etc/trino:ro
-      - ./data:/data:ro
-      - ./trino_runtime:/trino-data:ro
-    ports:
-      - "127.0.0.1:8089:8080"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info >/dev/null"]
-      interval: 15s
-      timeout: 5s
-      retries: 20
-    restart: unless-stopped
-
-  trino-bootstrap:
+  # Build inicial das tabelas de consulta. Também serve para atualização manual:
+  #   docker compose --profile parquet-init run --rm parquet-db-init
+  parquet-db-init:
     image: python:3.12-slim
-    container_name: tce_trino_bootstrap
-    profiles: ["trino-bootstrap"]
+    container_name: tce_parquet_db_init
+    profiles: ["parquet-init"]
     depends_on:
-      trino:
+      parquet-db:
         condition: service_healthy
     environment:
-      TRINO_URL: http://trino:8080/v1/statement
-      TRINO_USER: bootstrap
       DATA_DIR: /data
-      TRINO_DATA_DIR: /trino-data
-      TRINO_SOURCE_DIR: /data
+      PARQUET_DB_HOST: parquet-db
+      PARQUET_DB_PORT: "5432"
+      PARQUET_DB_NAME: ${PARQUET_DB_NAME:-tce}
+      PARQUET_DB_ADMIN_USER: ${PARQUET_DB_ADMIN_USER:-tce_admin}
+      PARQUET_DB_ADMIN_PASSWORD: ${PARQUET_DB_ADMIN_PASSWORD:?defina PARQUET_DB_ADMIN_PASSWORD no .env}
     volumes:
       - ./data:/data:ro
-      - ./trino_runtime:/trino-data
-      - ./scripts/atualizar_catalogo_trino.py:/bootstrap.py:ro
+      - ./scripts/refresh_parquet_db.py:/refresh_parquet_db.py:ro
     command: >
-      bash -lc "pip install --no-cache-dir pyarrow==19.0.1 && python /bootstrap.py"
+      bash -lc "pip install --no-cache-dir pyarrow==19.0.1 psycopg2-binary==2.9.10
+      && python /refresh_parquet_db.py"
     restart: "no"
 
 volumes:
   airflow_postgres_data:
-  trino_metastore_data:
+  parquet_pgdata:
