@@ -231,38 +231,35 @@ def renderizar_botoes_exportacao(
             st.error(f"Erro ao gerar JSON: {e}")
 
     with col_xlsx:
-        try:
-            with st.spinner("Compilando e cruzando dados relacionais da planilha..."):
-                df_detalhado = gerar_dataframe_detalhado(
-                    df_empenhos_filtrados, ano_inicial, ano_final, codigo_mun, 
-                    obter_caminho_func, carregar_e_filtrar_func
-                )
-                df_detalhado = df_detalhado.fillna('')
+        state_key = f"excel_relacional_{codigo_mun}_{ano_inicial}_{ano_final}_{id(df_empenhos_filtrados)}"
+        if st.button("📊 Preparar Excel Detalhado (Relacional)", use_container_width=True):
+            try:
+                with st.spinner("Compilando e cruzando dados relacionais; isso pode levar alguns minutos..."):
+                    df_detalhado = gerar_dataframe_detalhado(
+                        df_empenhos_filtrados, ano_inicial, ano_final, codigo_mun,
+                        obter_caminho_func, carregar_e_filtrar_func
+                    )
+                    if len(df_detalhado) > 1_048_576:
+                        st.error("O resultado ultrapassa o limite de 1.048.576 linhas por planilha do Excel. Reduza o período ou os filtros e tente novamente.")
+                        st.session_state.pop(state_key, None)
+                    else:
+                        excel_buffer = io.BytesIO()
+                        # Exportação sem Styler: evita materializar uma cópia formatada
+                        # enorme em memória, especialmente em consultas de vários anos.
+                        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                            df_detalhado.fillna('').to_excel(
+                                writer, index=False, sheet_name='Auditoria_TCE'
+                            )
+                        st.session_state[state_key] = excel_buffer.getvalue()
+            except Exception as e:
+                st.error(f"Erro ao gerar Excel Detalhado: {e}")
 
-                df_colorido = df_detalhado.style.set_properties(
-                    **{'background-color': '#FFF2CC'}, 
-                    subset=['numero_nota_pagamento', 'data_nota_pagamento', 'valor_nota_pagamento']
-                ).set_properties(
-                    **{'background-color': '#FCE4D6'}, 
-                    subset=['codigo_municipio', 'codigo_orgao', 'codigo_unidade', 'numero_empenho', 'codigo_elemento_despesa', 'valor_empenhado', 'nome_negociante', 'valor_empenhado_a_pagar']
-                ).set_properties(
-                    **{'background-color': '#DDEBF7'}, 
-                    subset=['numero_nota_pagamento', 'nu_documento_caixa']
-                ).set_properties(
-                    **{'background-color': '#E2EFDA'}, 
-                    subset=['data_liquidacao', 'valor_liquidado']
-                )
-                
-                excel_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    df_colorido.to_excel(writer, index=False, sheet_name='Auditoria_TCE')
-                
-                st.download_button(
-                    label="📊 Exportar Excel Detalhado (Relacional)",
-                    data=excel_buffer.getvalue(),
-                    file_name=f"auditoria_empenhos_{codigo_mun}_{ano_inicial}_a_{ano_final}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-        except Exception as e:
-            st.error(f"Erro ao gerar Excel Detalhado: {e}")
+        excel_pronto = st.session_state.get(state_key)
+        if excel_pronto:
+            st.download_button(
+                label="⬇️ Baixar Excel Detalhado (Relacional)",
+                data=excel_pronto,
+                file_name=f"auditoria_empenhos_{codigo_mun}_{ano_inicial}_a_{ano_final}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
