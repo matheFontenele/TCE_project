@@ -57,6 +57,9 @@ SCHEMA_STAGING = "parquet_staging"
 # leitor estiver numa consulta longa, a troca é abortada e tentada na próxima
 # execução, em vez de esperar indefinidamente.
 LOCK_TIMEOUT = os.getenv("PARQUET_DB_LOCK_TIMEOUT", "5s")
+# Limita quantos arquivos são lidos em cada INSERT. A consulta de schema usa
+# somente metadados; os dados são materializados em lotes no backend DuckDB.
+TAMANHO_LOTE = int(os.getenv("PARQUET_DB_BATCH_SIZE", "128"))
 
 
 def conexao():
@@ -99,14 +102,57 @@ def agrupar_arquivos(data_dir: Path) -> dict[str, list[str]]:
 
 
 def construir(cur, tabela: str, arquivos: list[str]) -> int:
-    """Cria a tabela nova no staging a partir dos parquets. Retorna nº de linhas."""
-    lista = sql.Literal(arquivos)  # -> ARRAY['a','b',...] com escape correto
+    """Cria no staging em lotes, preservando o schema global de union_by_name."""
+    if TAMANHO_LOTE <= 0:
+        raise ValueError("PARQUET_DB_BATCH_SIZE deve ser maior que zero")
+
     destino = sql.Identifier(SCHEMA_STAGING, tabela)
     cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(destino))
-    consulta = sql.SQL(
-        "CREATE TABLE {} AS SELECT * FROM read_parquet({}, union_by_name := true)"
-    ).format(destino, lista)
-    cur.execute(consulta)
+
+    # A inferência global de schema é necessária: unir schemas lote a lote
+    # mudaria ordem e tipos quando colunas/tipos surgem em arquivos posteriores.
+    # LIMIT 0 cria a tabela usando exatamente o schema global do union_by_name,
+    # sem materializar todas as linhas em um único operador.
+    lista_completa = sql.Literal(arquivos)
+    cur.execute(
+        sql.SQL(
+            "CREATE TABLE {} AS SELECT * FROM read_parquet({}, "
+            "union_by_name := true) LIMIT 0"
+        ).format(destino, lista_completa)
+    )
+    cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(destino))
+    colunas = [
+        descricao.name if hasattr(descricao, "name") else descricao[0]
+        for descricao in cur.description
+    ]
+    if not colunas:
+        raise RuntimeError(f"Nenhuma coluna encontrada para {tabela}")
+
+    colunas_sql = sql.SQL(", ").join(sql.Identifier(coluna) for coluna in colunas)
+    for inicio in range(0, len(arquivos), TAMANHO_LOTE):
+        lote = arquivos[inicio : inicio + TAMANHO_LOTE]
+        lista_lote = sql.Literal(lote)
+        fonte = sql.SQL("read_parquet({}, union_by_name := true)").format(lista_lote)
+
+        # LIMIT 0 retorna apenas metadados da fonte e cursor.description fornece
+        # os nomes sem depender do comando DuckDB DESCRIBE. Colunas globais
+        # ausentes recebem NULL; as comuns são selecionadas pelo nome para que
+        # drift de ordem não altere valores.
+        cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(fonte))
+        presentes = {
+            descricao.name if hasattr(descricao, "name") else descricao[0]
+            for descricao in cur.description
+        }
+        expressao = sql.SQL(", ").join(
+            sql.Identifier(coluna) if coluna in presentes else sql.SQL("NULL")
+            for coluna in colunas
+        )
+        cur.execute(
+            sql.SQL("INSERT INTO {} ({}) SELECT {} FROM {}").format(
+                destino, colunas_sql, expressao, fonte
+            )
+        )
+
     cur.execute(sql.SQL("SELECT count(*) FROM {}").format(destino))
     return cur.fetchone()[0]
 

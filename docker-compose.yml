@@ -191,6 +191,7 @@ services:
         condition: service_healthy
     environment:
       DATA_DIR: /data
+      PARQUET_DB_BATCH_SIZE: ${PARQUET_DB_BATCH_SIZE:-128}
       PARQUET_DB_HOST: parquet-db
       PARQUET_DB_PORT: "5432"
       PARQUET_DB_NAME: ${PARQUET_DB_NAME:-tce}
