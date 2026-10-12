@@ -127,6 +127,56 @@ necessário restringir o acesso à sub-rede interna, aplique uma regra na chain
 `DOCKER-USER` liberando TCP `5433` apenas de `172.16.0.0/24`. Sem essa regra, a
 porta fica acessível conforme a política padrão do host.
 
+## SQL Explorer (interface web)
+
+O painel Streamlit tem uma aba **🧮 SQL** que executa consultas sobre as mesmas
+tabelas de `public`, sem exigir instalar nada no computador do usuário. A
+execução roda no próprio Postgres (não no processo do Streamlit), então
+consultas grandes fazem spool em disco em vez de derrubar a aplicação.
+
+Prepare uma credencial de leitura para a aplicação:
+
+```bash
+./scripts/criar_usuario_leitura.sh tce_explorer
+```
+
+e coloque no `.env` (não versionado):
+
+```dotenv
+PARQUET_DB_READ_USER=tce_explorer
+PARQUET_DB_READ_PASSWORD=<a senha exibida pelo script>
+```
+
+O serviço `app` já recebe essas variáveis e aponta para o `parquet-db` pela rede
+interna do Docker. Variáveis opcionais:
+
+| Variável | Padrão | Efeito |
+|---|---|---|
+| `TCE_SQL_MAX_ROWS` | `2000` | Teto de linhas devolvidas por consulta |
+| `TCE_SQL_TIMEOUT_MS` | `15000` | Tempo máximo de uma consulta, em ms |
+| `TCE_SQL_BACKEND` | `postgres` | `postgres` (produção) ou `duckdb` (dev local) |
+
+### Segurança
+
+- A conexão usa um usuário **somente leitura** e a sessão é marcada com
+  `default_transaction_read_only = on`. A barreira é o banco, não uma lista de
+  palavras proibidas no texto do SQL.
+- A consulta é envolvida em `SELECT * FROM (<sql>) AS t LIMIT n+1`: aceita
+  `SELECT`/`WITH`, faz `DDL`/`DML` falharem e evita materializar o resultado
+  inteiro. O `n+1` serve só para avisar na tela quando o resultado foi truncado.
+
+### Desenvolvimento sem Postgres
+
+Para rodar a aba SQL localmente sem subir o `parquet-db`, use o backend direto:
+
+```bash
+TCE_SQL_BACKEND=duckdb DATA_DIR=data streamlit run src/app.py
+```
+
+Nesse modo o DuckDB abre os parquets em memória (limitado por
+`TCE_SQL_MEMORY_MB`, padrão `1024`). É só para desenvolvimento — em produção
+sempre use o backend `postgres`.
+
 ## Solução de problemas
 
 - **"DuckDB execution is not allowed":** a consulta tentou ler arquivos
@@ -135,3 +185,5 @@ porta fica acessível conforme a política padrão do host.
   aquele prefixo em `data/` e rode o refresh manual.
 - **Container não sobe:** verifique se `PARQUET_DB_ADMIN_PASSWORD` está no
   `.env` e se a porta `5433` não está em uso.
+- **Aba SQL responde "Defina PARQUET_DB_READ_USER...":** falta a credencial de
+  leitura no `.env` — rode `./scripts/criar_usuario_leitura.sh tce_explorer`.
