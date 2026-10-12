@@ -7,6 +7,7 @@ tqdm
 reportlab
 watchdog>=4.0.0
 duckdb==1.0.0
+psycopg2-binary==2.9.10
 schedule
 great_expectations
 pytest

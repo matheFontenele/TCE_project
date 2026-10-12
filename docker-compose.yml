@@ -11,6 +11,20 @@ services:
       - STREAMLIT_SERVER_RUN_ON_SAVE=true
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
       - TZ=America/Fortaleza
+      # SQL Explorer: executa no Postgres + pg_duckdb (nunca no processo do
+      # Streamlit). Usa um usuário somente leitura — crie com
+      # ./scripts/criar_usuario_leitura.sh tce_explorer.
+      - PARQUET_DB_HOST=${PARQUET_DB_HOST:-parquet-db}
+      - PARQUET_DB_PORT=${PARQUET_DB_INTERNAL_PORT:-5432}
+      - PARQUET_DB_NAME=${PARQUET_DB_NAME:-tce}
+      - PARQUET_DB_READ_USER=${PARQUET_DB_READ_USER:-tce_explorer}
+      - PARQUET_DB_READ_PASSWORD=${PARQUET_DB_READ_PASSWORD:?defina PARQUET_DB_READ_PASSWORD no .env}
+      - TCE_SQL_BACKEND=${TCE_SQL_BACKEND:-postgres}
+      - TCE_SQL_TIMEOUT_MS=${TCE_SQL_TIMEOUT_MS:-15000}
+      - TCE_SQL_MAX_ROWS=${TCE_SQL_MAX_ROWS:-2000}
+    depends_on:
+      parquet-db:
+        condition: service_healthy
     volumes:
       - .:/app
       - /app/__pycache__
