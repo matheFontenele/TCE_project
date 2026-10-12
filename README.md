@@ -443,6 +443,14 @@ O limite vem da variável `AIRFLOW_MIN_FREE_SPACE_GB` (padrão **20 GB**),
 configurável no `.env`. Defina `AIRFLOW_MIN_FREE_SPACE_GB=0` para desativar a
 verificação.
 
+## Contexto dos agentes
+
+O trabalho foi conduzido por várias sessões de agente em paralelo (Airflow, SQL
+Explorer, TCE AI Assistant, Spec Kit). O que cada uma produziu, o diagnóstico
+medido do OOM e as decisões/questões em aberto estão consolidados em
+[`docs/contexto-dos-agentes.md`](docs/contexto-dos-agentes.md) — leia esse
+documento antes de retomar o projeto.
+
 ## Suporte
 
 Em caso de erro ou necessidade de atualização, contate o responsável pelo
