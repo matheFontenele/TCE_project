@@ -93,6 +93,9 @@ services:
       PYTHONPATH: /app:/app/src
       TZ: America/Fortaleza
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      # Espaço livre mínimo (GB) no volume de data/ para o pipeline iniciar.
+      # Abaixo disso a task verificar_armazenamento falha e o run não baixa nada.
+      AIRFLOW_MIN_FREE_SPACE_GB: ${AIRFLOW_MIN_FREE_SPACE_GB:-20}
       PARQUET_DB_HOST: parquet-db
       PARQUET_DB_PORT: "5432"
       PARQUET_DB_NAME: ${PARQUET_DB_NAME:-tce}

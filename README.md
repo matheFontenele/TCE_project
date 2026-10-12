@@ -34,5 +34,17 @@ servidor, o projeto sobe um container Postgres com a extensão `pg_duckdb` que
 publica as tabelas via rede, somente leitura. Veja
 [`docs/acesso-parquet-db.md`](docs/acesso-parquet-db.md).
 
+## Guarda de armazenamento (Airflow)
+
+O DAG `tce_extracao_mensal` verifica o espaço livre no volume de `data/` **antes**
+de baixar qualquer parquet. Se o disco estiver abaixo do limite, a extração não
+inicia: a task `verificar_armazenamento` falha, o run fica vermelho e o alerta de
+Slack é disparado. Isso evita encher o disco no meio da extração e derrubar
+serviços vizinhos.
+
+O limite vem da variável `AIRFLOW_MIN_FREE_SPACE_GB` (padrão **20 GB**),
+configurável no `.env`. Defina `AIRFLOW_MIN_FREE_SPACE_GB=0` para desativar a
+verificação.
+
 ## Suporte
 Em caso de erro ou necessidade de atualização, contate o responsável pelo desenvolvimento do sistema.

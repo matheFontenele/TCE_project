@@ -68,6 +68,20 @@ default_args = {
 )
 def tce_extracao_mensal():
 
+    @task(task_id="verificar_armazenamento")
+    def verificar_armazenamento():
+        from src.quality.armazenamento import verificar_espaco_livre
+
+        # Guarda antes de baixar: se o volume estiver crítico, falha aqui (e o
+        # on_failure_callback avisa no Slack) em vez de encher o disco no meio
+        # da extração. Limite em AIRFLOW_MIN_FREE_SPACE_GB (padrão 20 GB).
+        info = verificar_espaco_livre(PROJECT_ROOT / "data")
+        logging.info(
+            "[ARMAZENAMENTO][OK] livre=%.1f GB de %.1f GB (mínimo %.1f GB) em %s",
+            info["livre_gb"], info["total_gb"], info["minimo_gb"], info["caminho"],
+        )
+        return info
+
     @task(task_id="calcular_janela_backfill")
     def calcular_janela(**context):
         referencia = context["data_interval_end"].date()
@@ -197,7 +211,10 @@ def tce_extracao_mensal():
                 )
             logging.info("[PARQUET-DB][OK] Tabelas de consulta atualizadas.")
 
-    atualizar_views(validar_parquets(executar_extracao(calcular_janela())))
+    checagem = verificar_armazenamento()
+    janela = calcular_janela()
+    checagem >> janela
+    atualizar_views(validar_parquets(executar_extracao(janela)))
 
 
 tce_extracao_mensal()
