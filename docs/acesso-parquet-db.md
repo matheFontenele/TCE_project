@@ -34,8 +34,14 @@ docker compose --profile parquet-init run --rm parquet-db-init
 ```
 
 O build inicial leva cerca de 30 segundos e cria uma tabela por prefixo de
-parquet (ex.: `liquidacoes`, `notas_empenho`, `veiculos_municipais`). Arquivos
-marcadores vazios (0 colunas) são ignorados automaticamente.
+parquet (ex.: `liquidacoes`, `notas_empenho`, `veiculos_municipais`).
+
+Arquivos marcadores vazios (0 colunas) são **ignorados no build** — não viram
+tabela, e isso é correto. Mas atenção: eles **não são lixo**. São o *cache
+negativo* do extrator, gravado de propósito quando a API não retorna registros
+para um mês/município, e nas execuções seguintes evitam a requisição. Por isso
+o build os ignora **sem apagá-los**; removê-los força a reconsulta (ver
+Constituição, Restrições Adicionais).
 
 ## Criar um usuário de leitura
 

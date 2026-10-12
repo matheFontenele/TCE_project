@@ -1,14 +1,3 @@
-"""
-Motor genérico de validação de arquivos DELIMITADOS (CSV com aspas) do TCE-CE.
-
-Diferente do layout posicional (largura fixa), alguns endpoints do TCE-CE
-entregam os dados em formato delimitado por vírgula, com campos textuais
-entre aspas duplas — ex: "994","049",202600,"16",...
-
-Este módulo espelha a API de src/validators/posicional.py (mesmos conceitos
-de CampoSchema, RegistroValidado, regras customizadas) mas usa índice de
-coluna em vez de posição/tamanho, já que aqui não há largura fixa.
-"""
 from __future__ import annotations
 
 import csv
